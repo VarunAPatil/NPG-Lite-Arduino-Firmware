@@ -37,33 +37,56 @@
 #include <Arduino.h>
 #include "esp_dsp.h"
 #include <vector>
+#include <Adafruit_NeoPixel.h>
 
 // ─── BLE Gamepad ───
 BleGamepad bleGamepad("NPG Gamepad", "Upside Down Labs", 100);
 
+// ─── NeoPixel ───
+#define PIXEL_PIN 15
+#define PIXEL_COUNT 6
+Adafruit_NeoPixel pixel(PIXEL_COUNT, PIXEL_PIN, NEO_GRB + NEO_KHZ800);
+#define BLE_LED     0
+#define BATTERY_LED 5
+
 // ─── Constants ───
-#define SAMPLE_RATE   500   // samples per second
-#define FFT_SIZE      256   // must be a power of two
-#define INPUT_PIN1    A0    // EEG input
-#define INPUT_PIN2    A1    // Left-hand EMG
-#define INPUT_PIN3    A2    // Right-hand EMG
+#define SAMPLE_RATE 500  // samples per second
+#define FFT_SIZE 256     // must be a power of two
+#define INPUT_PIN1 A0    // EEG input
+#define INPUT_PIN2 A1    // Left-hand EMG
+#define INPUT_PIN3 A2    // Right-hand EMG
+#define BATTERY_VOLTAGE_PIN A6
 
 // EEG bands (Hz)
-#define DELTA_LOW     0.5f
-#define DELTA_HIGH    4.0f
-#define THETA_LOW     4.0f
-#define THETA_HIGH    8.0f
-#define ALPHA_LOW     8.0f
-#define ALPHA_HIGH    13.0f
-#define BETA_LOW      13.0f
-#define BETA_HIGH     30.0f
-#define GAMMA_LOW     30.0f
-#define GAMMA_HIGH    45.0f
+#define DELTA_LOW 0.5f
+#define DELTA_HIGH 4.0f
+#define THETA_LOW 4.0f
+#define THETA_HIGH 8.0f
+#define ALPHA_LOW 8.0f
+#define ALPHA_HIGH 13.0f
+#define BETA_LOW 13.0f
+#define BETA_HIGH 30.0f
+#define GAMMA_LOW 30.0f
+#define GAMMA_HIGH 45.0f
 
 #define SMOOTHING_FACTOR 0.73f
-#define EPS               1e-7f
+#define EPS 1e-7f
 
-bool steer = true; // To switch between button 1 and 2 controlled by focus
+bool steer = true;  // To switch between button 1 and 2 controlled by focus
+
+// ─── BLE LED state machine ───
+enum LedState { LED_RED,
+                LED_GREEN,
+                LED_BLUE_FADE };
+LedState ledState = LED_RED;
+unsigned long lastCmdSentMs = 0;
+uint32_t lastPixel0Color = 0xFFFFFFFF;
+static bool pixelDirty = false;
+uint32_t batteryColor = 0;
+
+// ─── Battery check interval ───
+static const unsigned long BATTERY_CHECK_INTERVAL = 10000;
+static unsigned long lastBatteryCheck = -10000;
 
 // ─── Buffers & Types for FFT ───
 float inputBuffer[FFT_SIZE];
@@ -75,7 +98,7 @@ typedef struct {
   float delta, theta, alpha, beta, gamma, total;
 } BandpowerResults;
 
-BandpowerResults smoothedPowers = {0, 0, 0, 0, 0, 0};
+BandpowerResults smoothedPowers = { 0, 0, 0, 0, 0, 0 };
 
 // ─── Notch Filter (50 Hz) ───
 // For 50Hz AC noise removal
@@ -85,7 +108,9 @@ BandpowerResults smoothedPowers = {0, 0, 0, 0, 0, 0};
 // Reference: https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.butter.html
 class NotchFilter {
 private:
-  struct BiquadState { float z1 = 0, z2 = 0; };
+  struct BiquadState {
+    float z1 = 0, z2 = 0;
+  };
   BiquadState state1, state2;
 
 public:
@@ -94,11 +119,13 @@ public:
     // First biquad stage
     float x = output - (-1.56858163f * state1.z1) - (0.96424138f * state1.z2);
     output = 0.96508099f * x + (-1.56202714f * state1.z1) + (0.96508099f * state1.z2);
-    state1.z2 = state1.z1; state1.z1 = x;
+    state1.z2 = state1.z1;
+    state1.z1 = x;
     // Second biquad stage
     x = output - (-1.61100358f * state2.z1) - (0.96592171f * state2.z2);
     output = 1.00000000f * x + (-1.61854514f * state2.z1) + (1.00000000f * state2.z2);
-    state2.z2 = state2.z1; state2.z1 = x;
+    state2.z2 = state2.z1;
+    state2.z1 = x;
     return output;
   }
   void reset() {
@@ -121,10 +148,13 @@ public:
   double process(double input) {
     double x = input - -0.82523238 * z1 - 0.29463653 * z2;
     double output = 0.52996723 * x + -1.05993445 * z1 + 0.52996723 * z2;
-    z2 = z1; z1 = x;
+    z2 = z1;
+    z1 = x;
     return output;
   }
-  void reset() { z1 = z2 = 0.0; }
+  void reset() {
+    z1 = z2 = 0.0;
+  }
 };
 
 EMGHighPassFilter emgfilters[2];
@@ -138,7 +168,8 @@ private:
   const int bufferSize;
 
 public:
-  EnvelopeFilter(int bufferSize) : bufferSize(bufferSize) {
+  EnvelopeFilter(int bufferSize)
+    : bufferSize(bufferSize) {
     circularBuffer.resize(bufferSize, 0.0);
   }
   double getEnvelope(double absEmg) {
@@ -150,17 +181,17 @@ public:
   }
 };
 
-EnvelopeFilter Envelopefilter1(16); // left-hand EMG
-EnvelopeFilter Envelopefilter2(16); // right-hand EMG
+EnvelopeFilter Envelopefilter1(16);  // left-hand EMG
+EnvelopeFilter Envelopefilter2(16);  // right-hand EMG
 
-// ─── Battery Monitor LUT (MOVED HERE) ───
+// ─── Battery Monitor LUT ───
 const float voltageLUT[] = {
-  3.27, 3.61, 3.69, 3.71, 3.73, 3.75, 3.77, 3.79, 3.80, 3.82, 
+  3.27, 3.61, 3.69, 3.71, 3.73, 3.75, 3.77, 3.79, 3.80, 3.82,
   3.84, 3.85, 3.87, 3.91, 3.95, 3.98, 4.02, 4.08, 4.11, 4.15, 4.20
 };
 
 const int percentLUT[] = {
-  0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 
+  0, 5, 10, 15, 20, 25, 30, 35, 40, 45,
   50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100
 };
 
@@ -177,7 +208,7 @@ float interpolatePercentage(float voltage) {
 }
 
 int getCurrentBatteryPercentage() {
-  int analogValue = analogRead(A6);
+  int analogValue = analogRead(BATTERY_VOLTAGE_PIN);
   float voltage = (analogValue / 1000.0) * 2;
   voltage += 0.022;
   float percentage = interpolatePercentage(voltage);
@@ -194,22 +225,23 @@ float EEGFilter(float input) {
   static float z1 = 0, z2 = 0;
   float x = output - -1.22465158 * z1 - 0.45044543 * z2;
   output = 0.05644846 * x + 0.11289692 * z1 + 0.05644846 * z2;
-  z2 = z1; z1 = x;
+  z2 = z1;
+  z1 = x;
   return output;
 }
 
 // ─── FFT Routines ───
 BandpowerResults calculateBandpower(float* ps, float binRes, int halfSize) {
-  BandpowerResults r = {0, 0, 0, 0, 0, 0};
+  BandpowerResults r = { 0, 0, 0, 0, 0, 0 };
   for (int i = 1; i < halfSize; i++) {
     float freq = i * binRes;
     float p = ps[i];
     r.total += p;
-    if      (freq >= DELTA_LOW  && freq < DELTA_HIGH) r.delta += p;
-    else if (freq >= THETA_LOW  && freq < THETA_HIGH) r.theta += p;
-    else if (freq >= ALPHA_LOW  && freq < ALPHA_HIGH) r.alpha += p;
-    else if (freq >= BETA_LOW   && freq < BETA_HIGH)  r.beta  += p;
-    else if (freq >= GAMMA_LOW  && freq < GAMMA_HIGH) r.gamma += p;
+    if (freq >= DELTA_LOW && freq < DELTA_HIGH) r.delta += p;
+    else if (freq >= THETA_LOW && freq < THETA_HIGH) r.theta += p;
+    else if (freq >= ALPHA_LOW && freq < ALPHA_HIGH) r.alpha += p;
+    else if (freq >= BETA_LOW && freq < BETA_HIGH) r.beta += p;
+    else if (freq >= GAMMA_LOW && freq < GAMMA_HIGH) r.gamma += p;
   }
   return r;
 }
@@ -218,7 +250,7 @@ void smoothBandpower(const BandpowerResults* raw, BandpowerResults* s) {
   s->delta = SMOOTHING_FACTOR * raw->delta + (1 - SMOOTHING_FACTOR) * s->delta;
   s->theta = SMOOTHING_FACTOR * raw->theta + (1 - SMOOTHING_FACTOR) * s->theta;
   s->alpha = SMOOTHING_FACTOR * raw->alpha + (1 - SMOOTHING_FACTOR) * s->alpha;
-  s->beta  = SMOOTHING_FACTOR * raw->beta  + (1 - SMOOTHING_FACTOR) * s->beta;
+  s->beta = SMOOTHING_FACTOR * raw->beta + (1 - SMOOTHING_FACTOR) * s->beta;
   s->gamma = SMOOTHING_FACTOR * raw->gamma + (1 - SMOOTHING_FACTOR) * s->gamma;
   s->total = SMOOTHING_FACTOR * raw->total + (1 - SMOOTHING_FACTOR) * s->total;
 }
@@ -234,8 +266,8 @@ void initFFT() {
 void processFFT() {
   // 1) Pack real → complex
   for (int i = 0; i < FFT_SIZE; i++) {
-    y_cf[2*i]   = inputBuffer[i];
-    y_cf[2*i+1] = 0.0f;
+    y_cf[2 * i] = inputBuffer[i];
+    y_cf[2 * i + 1] = 0.0f;
   }
   // 2) FFT + bit-reverse + complex→real
   dsps_fft2r_fc32(y_cf, FFT_SIZE);
@@ -245,9 +277,9 @@ void processFFT() {
   // 3) Compute power spectrum (skip i=0)
   int half = FFT_SIZE / 2;
   for (int i = 0; i < half; i++) {
-    float re = y1_cf[2*i];
-    float im = y1_cf[2*i+1];
-    powerSpectrum[i] = re*re + im*im;
+    float re = y1_cf[2 * i];
+    float im = y1_cf[2 * i + 1];
+    powerSpectrum[i] = re * re + im * im;
   }
 
   // 4) Find peak bin
@@ -268,19 +300,49 @@ void processFFT() {
   float T = smoothedPowers.total + EPS;
 
   // 6) Button control based on beta waves
-  if(steer) {    // Button 1
+  if (!bleGamepad.isConnected()) return;
+
+  if (steer) {  // Button 1
     if (((smoothedPowers.beta / T) * 100) > 15) {
       bleGamepad.press(BUTTON_1);
+      lastCmdSentMs = millis();
+      ledState = LED_BLUE_FADE;
     } else {
       bleGamepad.release(BUTTON_1);
     }
-  }
-  else if(!steer) {    // Button 2 
+  } else if (!steer) {  // Button 2
     if (((smoothedPowers.beta / T) * 100) > 12) {
       bleGamepad.press(BUTTON_2);
+      lastCmdSentMs = millis();
+      ledState = LED_BLUE_FADE;
     } else {
       bleGamepad.release(BUTTON_2);
     }
+  }
+}
+
+// ─── BLE Status LED ───
+void updateBLELed() {
+  uint32_t color;
+
+  if (ledState == LED_RED) {
+    color = pixel.Color(20, 0, 0);
+  } else if (ledState == LED_GREEN) {
+    color = pixel.Color(0, 20, 0);
+  } else {
+    unsigned long elapsed = millis() - lastCmdSentMs;
+    if (elapsed < 50) {
+      color = pixel.Color(0, 0, 20);
+    } else {
+      ledState = LED_GREEN;
+      color = pixel.Color(0, 20, 0);
+    }
+  }
+
+  if (color != lastPixel0Color) {
+    lastPixel0Color = color;
+    pixel.setPixelColor(BLE_LED,color);
+    pixel.show();
   }
 }
 
@@ -292,24 +354,36 @@ void setup() {
   pinMode(INPUT_PIN1, INPUT);
   pinMode(INPUT_PIN2, INPUT);
   pinMode(INPUT_PIN3, INPUT);
-  pinMode(A6, INPUT);
+  pinMode(BATTERY_VOLTAGE_PIN, INPUT);
+
+  pixel.begin();
+  pixel.clear();
+  pixel.show();
+
+  // Initial battery color on pixel 5
+  int initBattery = getCurrentBatteryPercentage();
+  if (initBattery <= 20) {
+    batteryColor = pixel.Color(20, 0, 0);
+  } else if (initBattery <= 70) {
+    batteryColor = pixel.Color(30, 20, 0);
+  } else {
+    batteryColor = pixel.Color(0, 20, 0);
+  }
+  pixel.setPixelColor(BATTERY_LED,batteryColor);
+  pixel.setPixelColor(BLE_LED,pixel.Color(20, 0, 0));  // red = disconnected
+  lastPixel0Color = pixel.Color(20, 0, 0);
+  pixel.show();
 
   initFFT();
 
   Serial.println("Starting BLE Gamepad...");
   bleGamepad.begin();
-  
-  // Set initial battery level after begin()
-  if (bleGamepad.isConnected()) {
-    bleGamepad.setBatteryLevel(getCurrentBatteryPercentage());
-  }
 }
 
 void loop() {
   static uint16_t idx = 0;
   static unsigned long lastMicros = micros();
-  static unsigned long lastBatteryUpdate = 0;
-  
+
   unsigned long now = micros(), dt = now - lastMicros;
   lastMicros = now;
 
@@ -330,14 +404,14 @@ void loop() {
     // 3) Filter & envelope EMG
     float filtemg1 = emgfilters[0].process(filters[1].process(raw2));
     float filtemg2 = emgfilters[1].process(filters[2].process(raw3));
-    float env1     = Envelopefilter1.getEnvelope(abs(filtemg1));
-    float env2     = Envelopefilter2.getEnvelope(abs(filtemg2));
+    float env1 = Envelopefilter1.getEnvelope(abs(filtemg1));
+    float env2 = Envelopefilter2.getEnvelope(abs(filtemg2));
 
     static unsigned long lastModeSwitch = 0;
-    const unsigned long MODE_SWITCH_DEBOUNCE = 500; // 500ms debounce
+    const unsigned long MODE_SWITCH_DEBOUNCE = 500;  // 500ms debounce
 
     if (env1 > 200 && env2 > 200 && (millis() - lastModeSwitch > MODE_SWITCH_DEBOUNCE)) {  // Switching between button 1 and button 2
-      steer = !steer; 
+      steer = !steer;
       lastModeSwitch = millis();
     }
 
@@ -350,35 +424,47 @@ void loop() {
     // 4) Map to 16-bit X
     uint16_t x16;
     if (env1 > 80 && env1 > env2) {
-      x16 = 0;      // full left
-    }
-    else if (env2 > 80 && env2 > env1) {
+      x16 = 0;  // full left
+    } else if (env2 > 80 && env2 > env1) {
       x16 = 32767;  // full right
-    }
-    else {
+    } else {
       x16 = 16383;  // center
     }
 
     // 5) Send X-axis + any button states
     if (bleGamepad.isConnected()) {
-      // setAxes(x, y, z, rx, ry, rz) — only X changes, others stay 0 
+      // setAxes(x, y, z, rx, ry, rz) — only X changes, others stay 0
       bleGamepad.setAxes(x16, 0, 0, 0, 0, 0);
       bleGamepad.sendReport();
+      if (x16 != 16383) {
+        lastCmdSentMs = millis();
+        ledState = LED_BLUE_FADE;
+      }
     }
 
     // 6) Update battery level every 10 seconds
-    if (millis() - lastBatteryUpdate > 10000) {
+    unsigned long nowMs = millis();
+    if (nowMs - lastBatteryCheck >= BATTERY_CHECK_INTERVAL) {
       int currentBattery = getCurrentBatteryPercentage();
-      
+
+      if (currentBattery <= 20) {
+        batteryColor = pixel.Color(20, 0, 0);
+      } else if (currentBattery <= 70) {
+        batteryColor = pixel.Color(30, 20, 0);
+      } else {
+        batteryColor = pixel.Color(0, 20, 0);
+      }
+      pixelDirty = true;
+
       if (bleGamepad.isConnected()) {
         bleGamepad.setBatteryLevel(currentBattery);
       }
-      
+
       Serial.print("Battery: ");
       Serial.print(currentBattery);
       Serial.println("%");
-      
-      lastBatteryUpdate = millis();
+
+      lastBatteryCheck = nowMs;
     }
 
     // 7) Do FFT every FFT_SIZE samples
@@ -387,4 +473,21 @@ void loop() {
       idx = 0;
     }
   }
+
+  // BLE connection tracking
+  static bool lastConnected = false;
+  bool connected = bleGamepad.isConnected();
+  if (connected != lastConnected) {
+    lastConnected = connected;
+    ledState = connected ? LED_GREEN : LED_RED;
+    pixelDirty = true;
+  }
+
+  // Flush dirty pixel (battery color) and force BLE LED redraw
+  if (pixelDirty) {
+    pixel.setPixelColor(BATTERY_LED,batteryColor);
+    lastPixel0Color = 0xFFFFFFFF;
+    pixelDirty = false;
+  }
+  updateBLELed();
 }

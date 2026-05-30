@@ -37,6 +37,7 @@
 
 #include <Arduino.h>
 #include "esp_dsp.h"
+#include <Adafruit_NeoPixel.h>
 
 // #define DEBUG  // Uncomment this line to enable debugging
 
@@ -45,7 +46,10 @@
 #define FFT_SIZE          512          // must be a power of two
 #define BAUD_RATE         115200
 #define INPUT_PIN         A0
-#define LED_PIN 7
+#define LED_PIN             7
+#define PIXEL_PIN           15
+#define PIXEL_COUNT          6
+#define BATTERY_VOLTAGE_PIN A6
 
 // Envelope Configuration
 #define ENVELOPE_WINDOW_MS 100  // Smoothing window in milliseconds
@@ -79,6 +83,9 @@ volatile int samplesAvailable = 0;
 
 // Timer handle
 hw_timer_t *sampleTimer = NULL;
+
+Adafruit_NeoPixel pixel(PIXEL_COUNT, PIXEL_PIN, NEO_GRB + NEO_KHZ800);
+#define BATTERY_LED 5
 
 float eegBuffer[SAMPLES_PER_SEGMENT] = {0};
 float eogBuffer[SAMPLES_PER_SEGMENT] = {0};
@@ -337,6 +344,39 @@ void processFFT() {
 
 }
 
+// ─── Battery Monitor LUT ───
+const float voltageLUT[] = {
+  3.27, 3.61, 3.69, 3.71, 3.73, 3.75, 3.77, 3.79, 3.80, 3.82,
+  3.84, 3.85, 3.87, 3.91, 3.95, 3.98, 4.02, 4.08, 4.11, 4.15, 4.20
+};
+const int percentLUT[] = {
+  0, 5, 10, 15, 20, 25, 30, 35, 40, 45,
+  50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100
+};
+const int lutSize = sizeof(voltageLUT) / sizeof(voltageLUT[0]);
+
+float interpolatePercentage(float voltage) {
+  if (voltage <= voltageLUT[0]) return 0;
+  if (voltage >= voltageLUT[lutSize - 1]) return 100;
+  int i = 0;
+  while (i < lutSize - 1 && voltage > voltageLUT[i + 1]) i++;
+  float v1 = voltageLUT[i], v2 = voltageLUT[i + 1];
+  int p1 = percentLUT[i], p2 = percentLUT[i + 1];
+  return p1 + (voltage - v1) * (p2 - p1) / (v2 - v1);
+}
+
+int getCurrentBatteryPercentage() {
+  int analogValue = analogRead(BATTERY_VOLTAGE_PIN);
+  float voltage = (analogValue / 1000.0) * 2;
+  voltage += 0.022;
+  float percentage = interpolatePercentage(voltage);
+  return (int)percentage;
+}
+
+uint32_t batteryColor = 0;
+const unsigned long BATTERY_CHECK_INTERVAL = 10000;
+unsigned long lastBatteryCheck = -10000;
+
 // ISR function - keep it minimal and fast
 void IRAM_ATTR onSampleTimer() {
     // Only do essential work in ISR
@@ -367,6 +407,11 @@ void setup() {
   digitalWrite(LED_PIN, HIGH);
   delay(300);
   digitalWrite(LED_PIN, LOW);
+
+  pixel.begin();
+  pixel.clear();
+  pixel.show();
+
   initFFT();
 
   lastSegmentTimeMs = millis();  // Initialize the timer
@@ -549,4 +594,15 @@ void loop() {
     if (blinkCount == 1 && (nowMs - firstBlinkTime) > DOUBLE_BLINK_MS) {
         blinkCount = 0;
     }
+
+  // ── Battery level update every 10 seconds ──
+  if (millis() - lastBatteryCheck >= BATTERY_CHECK_INTERVAL) {
+    int currentBattery = getCurrentBatteryPercentage();
+    if      (currentBattery <= 20) batteryColor = pixel.Color(20, 0,  0);
+    else if (currentBattery <= 70) batteryColor = pixel.Color(30, 20, 0);
+    else                           batteryColor = pixel.Color(0,  20, 0);
+    pixel.setPixelColor(BATTERY_LED,batteryColor);
+    pixel.show();
+    lastBatteryCheck = millis();
+  }
 }

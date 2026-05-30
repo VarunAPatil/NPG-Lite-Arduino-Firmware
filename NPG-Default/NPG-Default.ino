@@ -36,12 +36,13 @@
 #define BOOT_PIN 9
 // How many NeoPixels are attached to the Arduino?
 #define PIXEL_COUNT 6
+#define BATTERY_LED 5
 
 uint8_t npgPins[] = {5, 4, 3, 8, 21, 23, 22, 7, 16, 17, 20, 18, 19};
 constexpr uint8_t TOTAL_PINS = sizeof(npgPins) / sizeof(npgPins[0]);
 
-// Declare NeoPixel strip object:
-Adafruit_NeoPixel strip(PIXEL_COUNT, PIXEL_PIN, NEO_GRB + NEO_KHZ800);
+// Declare NeoPixel pixel object:
+Adafruit_NeoPixel pixel(PIXEL_COUNT, PIXEL_PIN, NEO_GRB + NEO_KHZ800);
 
 // LUT for 1S LiPo (Voltage in ascending order)
 const float voltageLUT[] = {
@@ -83,9 +84,9 @@ int noteDurations[] = {
 };
 
 void colorWipe(uint32_t color, int wait) {
-  for(int i=0; i<strip.numPixels(); i++) { // For each pixel in strip...
-    strip.setPixelColor(i, color);         //  Set pixel's color (in RAM)
-    strip.show();                          //  Update strip to match
+  for(int i=0; i<pixel.numPixels(); i++) { // For each pixel in pixel...
+    pixel.setPixelColor(i, color);         //  Set pixel's color (in RAM)
+    pixel.show();                          //  Update pixel to match
     delay(wait);                           //  Pause for a moment
   }
 }
@@ -93,12 +94,12 @@ void colorWipe(uint32_t color, int wait) {
 void theaterChase(uint32_t color, int wait) {
   for(int a=0; a<10; a++) {  // Repeat 10 times...
     for(int b=0; b<3; b++) { //  'b' counts from 0 to 2...
-      strip.clear();         //   Set all pixels in RAM to 0 (off)
-      // 'c' counts up from 'b' to end of strip in steps of 3...
-      for(int c=b; c<strip.numPixels(); c += 3) {
-        strip.setPixelColor(c, color); // Set pixel 'c' to value 'color'
+      pixel.clear();         //   Set all pixels in RAM to 0 (off)
+      // 'c' counts up from 'b' to end of pixel in steps of 3...
+      for(int c=b; c<pixel.numPixels(); c += 3) {
+        pixel.setPixelColor(c, color); // Set pixel 'c' to value 'color'
       }
-      strip.show(); // Update strip with new contents
+      pixel.show(); // Update pixel with new contents
       delay(wait);  // Pause for a moment
     }
   }
@@ -110,15 +111,15 @@ void rainbow(int wait) {
   // just count from 0 to 5*65536. Adding 256 to firstPixelHue each time
   // means we'll make 5*65536/256 = 1280 passes through this loop:
   for(long firstPixelHue = 0; firstPixelHue < 5*65536; firstPixelHue += 256) {
-    // strip.rainbow() can take a single argument (first pixel hue) or
+    // pixel.rainbow() can take a single argument (first pixel hue) or
     // optionally a few extras: number of rainbow repetitions (default 1),
     // saturation and value (brightness) (both 0-255, similar to the
     // ColorHSV() function, default 255), and a true/false flag for whether
     // to apply gamma correction to provide 'truer' colors (default true).
-    strip.rainbow(firstPixelHue);
+    pixel.rainbow(firstPixelHue);
     // Above line is equivalent to:
-    // strip.rainbow(firstPixelHue, 1, 255, 255, true);
-    strip.show(); // Update strip with new contents
+    // pixel.rainbow(firstPixelHue, 1, 255, 255, true);
+    pixel.show(); // Update pixel with new contents
     delay(wait);  // Pause for a moment
   }
 }
@@ -127,17 +128,17 @@ void theaterChaseRainbow(int wait) {
   int firstPixelHue = 0;     // First pixel starts at red (hue 0)
   for(int a=0; a<30; a++) {  // Repeat 30 times...
     for(int b=0; b<3; b++) { //  'b' counts from 0 to 2...
-      strip.clear();         //   Set all pixels in RAM to 0 (off)
-      // 'c' counts up from 'b' to end of strip in increments of 3...
-      for(int c=b; c<strip.numPixels(); c += 3) {
+      pixel.clear();         //   Set all pixels in RAM to 0 (off)
+      // 'c' counts up from 'b' to end of pixel in increments of 3...
+      for(int c=b; c<pixel.numPixels(); c += 3) {
         // hue of pixel 'c' is offset by an amount to make one full
         // revolution of the color wheel (range 65536) along the length
-        // of the strip (strip.numPixels() steps):
-        int      hue   = firstPixelHue + c * 65536L / strip.numPixels();
-        uint32_t color = strip.gamma32(strip.ColorHSV(hue)); // hue -> RGB
-        strip.setPixelColor(c, color); // Set pixel 'c' to value 'color'
+        // of the pixel (pixel.numPixels() steps):
+        int      hue   = firstPixelHue + c * 65536L / pixel.numPixels();
+        uint32_t color = pixel.gamma32(pixel.ColorHSV(hue)); // hue -> RGB
+        pixel.setPixelColor(c, color); // Set pixel 'c' to value 'color'
       }
-      strip.show();                // Update strip with new contents
+      pixel.show();                // Update pixel with new contents
       delay(wait);                 // Pause for a moment
       firstPixelHue += 65536 / 90; // One cycle of color wheel over 90 frames
     }
@@ -207,9 +208,9 @@ void setup() {
   Serial.begin(115200);
   delay(1000);
 
-  strip.begin();           // INITIALIZE NeoPixel strip object (REQUIRED)
-  strip.show();            // Turn OFF all pixels ASAP
-  strip.setBrightness(50); // Set BRIGHTNESS to about 1/5 (max = 255)
+  pixel.begin();           // INITIALIZE NeoPixel pixel object (REQUIRED)
+  pixel.show();            // Turn OFF all pixels ASAP
+  pixel.setBrightness(50); // Set BRIGHTNESS to about 1/5 (max = 255)
   
   //check battery first
   int analogValue = analogRead(A6);
@@ -221,9 +222,9 @@ void setup() {
   {
     static uint16_t fader = 100;
     static bool decreasing = true;
-    strip.clear();
-    strip.setPixelColor(0, strip.Color(fader, 0, 0));
-    strip.show();
+    pixel.clear();
+    pixel.setPixelColor(BATTERY_LED, pixel.Color(fader, 0, 0));
+    pixel.show();
     delay(20);
     if (decreasing){
       fader = fader - 2;
@@ -240,17 +241,17 @@ void setup() {
 
   pinMode(BOOT_PIN, INPUT_PULLUP);
   for (int i = 0; i < 6; i++){
-    // just for strip pattern => 0->5->1->4->2->3
+    // just for pixel pattern => 0->5->1->4->2->3
     uint8_t cF = i%2 ? 1 : 0;
     uint8_t pX = cF ? 6 - (i+1)/2 : i/2;
-    strip.setPixelColor(pX, strip.Color(255 * pX/5, 255*(5-pX)/5,  255 * (1 - pX)/5));
-    strip.show();
+    pixel.setPixelColor(pX, pixel.Color(255 * pX/5, 255*(5-pX)/5,  255 * (1 - pX)/5));
+    pixel.show();
     delay(500);
-    strip.clear();
+    pixel.clear();
     if (digitalRead(BOOT_PIN) == LOW){
       if (!checkShorts(npgPins, TOTAL_PINS)){
-        strip.setPixelColor(0, strip.Color(255, 0, 0));
-        strip.show();
+        pixel.setPixelColor(0, pixel.Color(255, 0, 0));
+        pixel.show();
         while (true){
           delay(100); // Stop if shorts are found
         }
@@ -262,14 +263,14 @@ void setup() {
   pinMode(LED_MOTOR_PIN, OUTPUT);
 
   // Set static rainbow colors on each pixel individually
-  strip.setPixelColor(0, strip.ColorHSV(0, 255, 255));       // Red
-  strip.setPixelColor(1, strip.ColorHSV(10922, 255, 255));   // Orange
-  strip.setPixelColor(2, strip.ColorHSV(21845, 255, 255));   // Yellow
-  strip.setPixelColor(3, strip.ColorHSV(32768, 255, 255));   // Green
-  strip.setPixelColor(4, strip.ColorHSV(43690, 255, 255));   // Blue
-  strip.setPixelColor(5, strip.ColorHSV(54613, 255, 255));   // Purple
+  pixel.setPixelColor(0, pixel.ColorHSV(0, 255, 255));       // Red
+  pixel.setPixelColor(1, pixel.ColorHSV(10922, 255, 255));   // Orange
+  pixel.setPixelColor(2, pixel.ColorHSV(21845, 255, 255));   // Yellow
+  pixel.setPixelColor(3, pixel.ColorHSV(32768, 255, 255));   // Green
+  pixel.setPixelColor(4, pixel.ColorHSV(43690, 255, 255));   // Blue
+  pixel.setPixelColor(5, pixel.ColorHSV(54613, 255, 255));   // Purple
   
-  strip.show(); // Update the strip with the new colors
+  pixel.show(); // Update the pixel with the new colors
 
   // iterate over the notes of the melody:
   for (int thisNote = 0; thisNote < 8; thisNote++) {
@@ -293,16 +294,16 @@ void setup() {
 }
 
 void loop() {
-  // Fill along the length of the strip in various colors...
-  colorWipe(strip.Color(255,   0,   0), 50); // Red
-  colorWipe(strip.Color(  0, 255,   0), 50); // Green
-  colorWipe(strip.Color(  0,   0, 255), 50); // Blue
+  // Fill along the length of the pixel in various colors...
+  colorWipe(pixel.Color(255,   0,   0), 50); // Red
+  colorWipe(pixel.Color(  0, 255,   0), 50); // Green
+  colorWipe(pixel.Color(  0,   0, 255), 50); // Blue
 
   // Do a theater marquee effect in various colors...
-  theaterChase(strip.Color(127, 127, 127), 50); // White, half brightness
-  theaterChase(strip.Color(127,   0,   0), 50); // Red, half brightness
-  theaterChase(strip.Color(  0,   0, 127), 50); // Blue, half brightness
+  theaterChase(pixel.Color(127, 127, 127), 50); // White, half brightness
+  theaterChase(pixel.Color(127,   0,   0), 50); // Red, half brightness
+  theaterChase(pixel.Color(  0,   0, 127), 50); // Blue, half brightness
 
-  rainbow(10);             // Flowing rainbow cycle along the whole strip
-  theaterChaseRainbow(50); // Rainbow-enhanced theaterChase variant// Fill along the length of the strip in various colors...
+  rainbow(10);             // Flowing rainbow cycle along the whole pixel
+  theaterChaseRainbow(50); // Rainbow-enhanced theaterChase variant// Fill along the length of the pixel in various colors...
 }

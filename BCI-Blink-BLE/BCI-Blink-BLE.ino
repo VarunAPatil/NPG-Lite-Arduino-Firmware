@@ -173,7 +173,7 @@ void showPixels()
 {
   for(int i=0; i<PIXEL_COUNT; i++)
   {
-    pixels.setPixelColor(i, pixels.Color(5, 5, 5)); // Level 1 to 6
+    pixels.setPixelColor(i, pixels.Color(20, 20, 20)); // Level 1 to 6
   }
   pixels.show();
 }
@@ -250,7 +250,7 @@ void loop() {
     }
     else if (menu && menuIndex > 0 && blinkCount==2 && (nowMs - secondBlinkTime) <= triple_blink_ms)
     {
-          pixels.setPixelColor(menuIndex-1, pixels.Color(0,10,0));
+          pixels.setPixelColor(menuIndex-1, pixels.Color(0,20,0));
     pixels.show();
 
     uint8_t cmd[2] = { (uint8_t)'A', (uint8_t)menuIndex };
@@ -304,7 +304,7 @@ void loop() {
       }
 
       showPixels();
-      pixels.setPixelColor(menuIndex-1, pixels.Color(0, 0 , 10));
+      pixels.setPixelColor(menuIndex-1, pixels.Color(0, 0 , 20));
       pixels.show();
       blinkCount = 0;
     }

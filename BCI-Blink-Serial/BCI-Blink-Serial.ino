@@ -269,7 +269,7 @@ void processFFT() {
     {
       for(int i=0; i<4; i++)
       {
-        pixels.setPixelColor(menuIndex, pixels.Color(0, 10, 0)); // Select the option by turning the LED green
+        pixels.setPixelColor(menuIndex, pixels.Color(0, 20, 0)); // Select the option by turning the LED green
         pixels.show();
         delay(400);
         pixels.clear();
@@ -286,7 +286,7 @@ void showPixels()  // Turn all LEDs white
 {
   for(int i=0; i<PIXEL_COUNT; i++)
   {
-    pixels.setPixelColor(i, pixels.Color(7, 7, 7)); // Level 1 to 6
+    pixels.setPixelColor(i, pixels.Color(20, 20, 20)); // Level 1 to 6
   }
   pixels.show();
 }
@@ -340,7 +340,7 @@ void loop() {
           showPixels();   // Turn all LEDs white
           delay(100);
           menuIndex=0;    // Deafult index 1
-          pixels.setPixelColor(menuIndex, pixels.Color(0, 0, 10));  // Hovered LED Blue 
+          pixels.setPixelColor(menuIndex, pixels.Color(0, 0, 20));  // Hovered LED Blue 
           pixels.show();
           blinkCount = 0;         // reset for next pair
         }
@@ -359,7 +359,7 @@ void loop() {
           }
           showPixels();
           delay(100);
-          pixels.setPixelColor(menuIndex, pixels.Color(0, 0 , 10));
+          pixels.setPixelColor(menuIndex, pixels.Color(0, 0 , 20));
           pixels.show();
           blinkCount = 0;
         }

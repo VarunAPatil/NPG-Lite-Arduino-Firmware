@@ -29,9 +29,15 @@
 
 #include <Arduino.h>
 #include <IRremote.hpp>
+#include <Adafruit_NeoPixel.h>
 
-#define IR_SEND_PIN 22   // your IR-LED pin (via resistor/transistor)
-#define BOOT_BUTTON  9     // NPG-Lite BOOT button (active LOW)
+#define IR_SEND_PIN         22    // your IR-LED pin (via resistor/transistor)
+#define BOOT_BUTTON          9    // NPG-Lite BOOT button (active LOW)
+#define PIXEL_PIN           15
+#define BATTERY_VOLTAGE_PIN A6
+
+Adafruit_NeoPixel pixel(6, PIXEL_PIN, NEO_GRB + NEO_KHZ800);
+#define BATTERY_LED 5
 
 int c = 0;   // Counter for maintaining ON/OFF state
 
@@ -39,7 +45,41 @@ int c = 0;   // Counter for maintaining ON/OFF state
 static const uint32_t FULL_ON  = 0x8800B0B;  
 static const uint32_t FULL_OFF = 0x88C0051;  
 
+// ── Battery indicator (pixel 5) ──
+static const unsigned long BATTERY_CHECK_INTERVAL = 10000;
+static unsigned long lastBatteryCheck = -10000;
+const float voltageLUT[] = {
+  3.27, 3.61, 3.69, 3.71, 3.73, 3.75, 3.77, 3.79, 3.80, 3.82,
+  3.84, 3.85, 3.87, 3.91, 3.95, 3.98, 4.02, 4.08, 4.11, 4.15, 4.20
+};
+const int percentLUT[] = {
+  0, 5, 10, 15, 20, 25, 30, 35, 40, 45,
+  50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100
+};
+const int lutSize = sizeof(voltageLUT) / sizeof(voltageLUT[0]);
+
+float interpolatePercentage(float voltage) {
+  if (voltage <= voltageLUT[0]) return 0;
+  if (voltage >= voltageLUT[lutSize - 1]) return 100;
+  int i = 0;
+  while (i < lutSize - 1 && voltage > voltageLUT[i + 1]) i++;
+  float v1 = voltageLUT[i], v2 = voltageLUT[i + 1];
+  int p1 = percentLUT[i], p2 = percentLUT[i + 1];
+  return p1 + (voltage - v1) * (p2 - p1) / (v2 - v1);
+}
+
+int getCurrentBatteryPercentage() {
+  int analogValue = analogRead(BATTERY_VOLTAGE_PIN);
+  float voltage = (analogValue / 1000.0) * 2;
+  voltage += 0.022;
+  return (int)interpolatePercentage(voltage);
+}
+
 void setup() {
+  pixel.begin();
+  pixel.clear();
+  pixel.show();
+
   Serial.begin(115200);
   pinMode(BOOT_BUTTON, INPUT_PULLUP);
   Serial.println("\n===== LG-AC: Send Full 28-bit Codes =====");
@@ -48,6 +88,18 @@ void setup() {
 }
 
 void loop() {
+  unsigned long currentMillis = millis();
+  if (currentMillis - lastBatteryCheck >= BATTERY_CHECK_INTERVAL) {
+    int pct = getCurrentBatteryPercentage();
+    uint32_t color;
+    if (pct <= 20)      color = pixel.Color(20, 0, 0);
+    else if (pct <= 70) color = pixel.Color(30, 20, 0);
+    else                color = pixel.Color(0, 20, 0);
+    pixel.setPixelColor(BATTERY_LED,color);
+    pixel.show();
+    lastBatteryCheck = currentMillis;
+  }
+
   // When Boot button is pressed
   if(digitalRead(BOOT_BUTTON) == LOW)
   {

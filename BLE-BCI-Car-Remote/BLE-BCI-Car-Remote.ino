@@ -50,6 +50,8 @@
 #define PIN_LED_VIB    7   // NPG Lite: shared LED + vibration motor
 
 Adafruit_NeoPixel pixel(6, PIN_NEOPIXEL, NEO_GRB + NEO_KHZ800);
+#define BLE_LED     0
+#define BATTERY_LED 5
 
 // ---------------------------------------------------------------
 //  Signal processing config
@@ -60,6 +62,7 @@ Adafruit_NeoPixel pixel(6, PIN_NEOPIXEL, NEO_GRB + NEO_KHZ800);
 #define INPUT_PIN1    A0   // EEG
 #define INPUT_PIN2    A1   // Left EMG
 #define INPUT_PIN3    A2   // Right EMG
+#define BATTERY_VOLTAGE_PIN A6   //Battery connected ADC
 
 #define DELTA_LOW   0.5f
 #define DELTA_HIGH  4.0f
@@ -96,6 +99,7 @@ float gBetaPct = 0.0f;
 float gEnv1    = 0.0f;
 float gEnv2    = 0.0f;
 bool  debugEnabled = false;
+static bool pixelDirty = false;
 
 // ---------------------------------------------------------------
 //  BLE objects
@@ -110,11 +114,18 @@ BLE2902           *pBLE2902_2;
 bool deviceConnected    = false;
 bool oldDeviceConnected = false;
 
+
 // ---------------------------------------------------------------
 //  Control state
 // ---------------------------------------------------------------
 bool     isGoingBackward = false;
 uint32_t lastSentCmd     = 255;
+
+// ── BLE LED state machine ──
+enum LedState { LED_RED, LED_GREEN, LED_BLUE_FADE };
+LedState      ledState        = LED_RED;
+unsigned long lastCmdSentMs   = 0;
+uint32_t      lastPixel0Color = 0xFFFFFFFF;
 
 // ---------------------------------------------------------------
 //  DSP buffers
@@ -128,6 +139,48 @@ typedef struct {
   float delta, theta, alpha, beta, gamma, total;
 } BandpowerResults;
 BandpowerResults smoothedPowers = { 0, 0, 0, 0, 0, 0 };
+
+// ---------------------------------------------------------------
+//  Battery level indication
+// ---------------------------------------------------------------
+static const unsigned long BATTERY_CHECK_INTERVAL = 10000; // Interval in milliseconds
+static unsigned long lastBatteryCheck = -10000;;
+uint32_t batteryColor = 0; // stored battery LED color
+const float voltageLUT[] = {
+  3.27, 3.61, 3.69, 3.71, 3.73, 3.75, 3.77, 3.79, 3.80, 3.82, 
+  3.84, 3.85, 3.87, 3.91, 3.95, 3.98, 4.02, 4.08, 4.11, 4.15, 4.20
+};
+
+const int percentLUT[] = {
+  0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 
+  50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100
+};
+
+const int lutSize = sizeof(voltageLUT) / sizeof(voltageLUT[0]);
+
+// Interpolation function
+float interpolatePercentage(float voltage) {
+  // Handle out-of-range voltages
+  if (voltage <= voltageLUT[0]) return 0;
+  if (voltage >= voltageLUT[lutSize - 1]) return 100;
+
+  // Find the nearest LUT entries
+  int i = 0;
+  while (i < lutSize - 1 && voltage > voltageLUT[i + 1]) i++;
+
+  // Interpolate
+  float v1 = voltageLUT[i], v2 = voltageLUT[i + 1];
+  int p1 = percentLUT[i], p2 = percentLUT[i + 1];
+  return p1 + (voltage - v1) * (p2 - p1) / (v2 - v1);
+}
+
+int getCurrentBatteryPercentage() {
+  int analogValue = analogRead(BATTERY_VOLTAGE_PIN);
+  float voltage = (analogValue / 1000.0) * 2;
+  voltage += 0.022;
+  float percentage = interpolatePercentage(voltage);
+  return (int)percentage;
+}
 
 // ----------------- NOTCH FILTER CLASSES -----------------
 // For 50Hz AC noise removal
@@ -215,6 +268,8 @@ void sendCmd(uint32_t cmd) {
   pCharacteristic_1->notify();
   Serial.print("cmd: ");
   Serial.println(cmd);
+  lastCmdSentMs = millis();
+  ledState      = LED_BLUE_FADE;
 }
 
 // ---------------------------------------------------------------
@@ -301,6 +356,42 @@ void handleSerialCommands() {
 }
 
 // ---------------------------------------------------------------
+//  BLE status LED — pixel 0
+// ---------------------------------------------------------------
+void updateBLELed() {
+  uint32_t color;
+
+  if (ledState == LED_RED) {
+    color = pixel.Color(20, 0, 0);
+
+  } else if (ledState == LED_GREEN) {
+    color = pixel.Color(0, 20, 0);
+
+  } else {
+    
+    unsigned long elapsed = millis() - lastCmdSentMs;
+
+    if (elapsed < 50) {
+      // hold full brightness during flash
+      color = pixel.Color(0, 0, 30);
+
+    } 
+    else {
+      // 2s passed with no new command — return to green
+      ledState = LED_GREEN;
+      color    = pixel.Color(0, 20, 0);
+    }
+  }
+
+  // only write to NeoPixel bus if color actually changed
+  if (color != lastPixel0Color) {
+    lastPixel0Color = color;
+    pixel.setPixelColor(BLE_LED,color);
+    pixel.show();
+  }
+}
+
+// ---------------------------------------------------------------
 //  BLE server callbacks
 // ---------------------------------------------------------------
 class MyServerCallbacks : public BLEServerCallbacks {
@@ -312,6 +403,8 @@ class MyServerCallbacks : public BLEServerCallbacks {
       digitalWrite(PIN_LED_VIB, LOW);
       if (i == 0) delay(100);
     }
+    ledState = LED_GREEN;
+    pixelDirty = true;
     Serial.println("car connected");
     BLEDevice::getAdvertising()->stop();
   }
@@ -319,6 +412,8 @@ class MyServerCallbacks : public BLEServerCallbacks {
     deviceConnected = false;
     lastSentCmd = 255;
     digitalWrite(PIN_LED_VIB, LOW);
+    ledState = LED_RED;
+    pixelDirty = true;
     Serial.println("car disconnected, re-advertising");
     BLEDevice::startAdvertising();
   }
@@ -328,7 +423,7 @@ class MyServerCallbacks : public BLEServerCallbacks {
 //  Bandpower helpers
 // ---------------------------------------------------------------
 BandpowerResults calculateBandpower(float *ps, float binRes, int half) {
-  BandpowerResults r = { 0, 0, 0, 0, 0, 0 };
+  BandpowerResults r = { 0, 0, 0, 0, 0, 0 };  
   for (int i = 1; i < half; i++) {
     float freq = i * binRes, p = ps[i];
     r.total += p;
@@ -388,18 +483,6 @@ void processFFT() {
       sendCmd(0);
     }
   }
-}
-
-// ---------------------------------------------------------------
-//  NeoPixel update
-// ---------------------------------------------------------------
-void updatePixels() {
-  pixel.setPixelColor(0, pixel.Color(255, 165, 0));
-  pixel.setPixelColor(5, deviceConnected
-                           ? pixel.Color(0, 255, 0)
-                           : pixel.Color(255, 0, 0));
-  pixel.setPixelColor(2, pixel.Color(0, 0, 0));
-  pixel.show();
 }
 
 // ---------------------------------------------------------------
@@ -468,7 +551,8 @@ void setup() {
   pAdvertising->setMaxPreferred(0x12);
   BLEDevice::startAdvertising();
 
-  updatePixels();
+  pixel.setPixelColor(BATTERY_LED,batteryColor); // batteryColor is 0 at boot, pixel stays off
+  pixel.show();
   Serial.println("Advertising, waiting for car...");
   Serial.println("Serial commands:");
   Serial.println("  debug                      - start debug output");
@@ -485,7 +569,6 @@ void setup() {
 void loop() {
   static uint16_t      idx        = 0;
   static unsigned long lastMicros = micros();
-  static bool          pixelDirty = true;
   static long          timer      = 0;
 
   // ── debug print counter (counts samples, resets every N) ──
@@ -496,10 +579,26 @@ void loop() {
 
   handleSerialCommands();
 
-  if (deviceConnected != oldDeviceConnected) pixelDirty = true;
   if (pixelDirty) {
-    updatePixels();
+    pixel.setPixelColor(BATTERY_LED,batteryColor);
+    lastPixel0Color = 0xFFFFFFFF;
     pixelDirty = false;
+  }
+  updateBLELed();
+
+  unsigned long currentMillis = millis();
+
+  if (currentMillis - lastBatteryCheck >= BATTERY_CHECK_INTERVAL) {
+    int currentBattery = getCurrentBatteryPercentage();
+    if (currentBattery <= 20) {
+      batteryColor = pixel.Color(20, 0, 0);  // red
+    } else if (currentBattery <= 70) {
+      batteryColor = pixel.Color(30, 20, 0);  // orange
+    } else {
+      batteryColor = pixel.Color(0, 20, 0);  // green
+    }
+    pixelDirty = true; 
+    lastBatteryCheck = currentMillis;
   }
 
   timer -= dt;
@@ -554,7 +653,7 @@ void loop() {
   }
 
   // ── FFT when buffer full ──
-  if (idx >= FFT_SIZE) {
+  if (idx >= FFT_SIZE) {  
     processFFT();
     idx = 0;
   }
