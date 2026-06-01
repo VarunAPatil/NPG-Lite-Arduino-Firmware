@@ -1,6 +1,6 @@
 # NPG Lite Arduino Firmware
 
-**Neuro PlayGround (NPG) Lite** is an open-source neuroscience development board by [Upside Down Labs](https://upsidedownlabs.tech/) that lets you read, process, and act on biosignals like EEG, EMG, and EOG directly from an ESP32-based wearable. This repository contains the complete Arduino firmware library for the NPG Lite hardware.
+**Neuro PlayGround (NPG) Lite** is an open-source neuroscience development board by [Upside Down Labs](https://upsidedownlabs.tech/) that lets you read, process, and act on bio-potential signals like EEG, EMG, and EOG directly from an ESP32-based wearable. This repository contains the complete Arduino firmware library for the NPG Lite hardware.
 
 
 ## What This Repo Contains
@@ -38,7 +38,7 @@ All BLE-enabled or peripheral-using sketches follow a shared 6-LED NeoPixel conv
 
 | LED | Standard Role | Colors |
 |-----|--------------|--------|
-| **LED 1** | BLE / Wi-Fi connection status | GREEN = connected · RED = disconnected · BLUE = actively streaming |
+| **LED 1** | BLE / Wi-Fi connection status | GREEN = connected · RED = disconnected · BLUE = actively streaming data |
 | **LED 2** | General purpose | Sketch-specific |
 | **LED 3** | I²C peripheral status | GREEN = device found · RED = device missing |
 | **LED 4** | General purpose | Sketch-specific |
