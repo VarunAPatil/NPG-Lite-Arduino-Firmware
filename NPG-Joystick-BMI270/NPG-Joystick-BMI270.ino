@@ -33,12 +33,12 @@ Adafruit_NeoPixel pixel(PIXEL_COUNT, PIXEL_PIN, NEO_GRB + NEO_KHZ800);
 #define BATTERY_LED 5
 #define IMU_LED 3
 #define BLUE_LED_DURATION 100
-uint32_t imuAddress = 0x68;
+const uint8_t IMU_ADDRESS = 0x68;
 
 // ══════════════════════════════════════════════════════════════════════════════
 // ─── CONTROL MAPPING CONFIGURATION ───
 // ══════════════════════════════════════════════════════════════════════════════
-// Head movement (accelerometer) -> Mouse cursor movement (POSITION HOLD)
+// Head movement (accelerometer) -> Mouse cursor movement (velocity control)
 // Jaw Clench -> Left mouse click
 // Triple blink -> Right mouse click
 
@@ -47,34 +47,28 @@ uint32_t imuAddress = 0x68;
 // ══════════════════════════════════════════════════════════════════════════════
 
 //  BASIC SETTINGS (ADJUST THESE TO FINE-TUNE)
-#define MOUSE_UPDATE_RATE 8  // Update frequency: LOWER = faster updates (8-20)
-#define DEADZONE 0.3          // Rest zone: HIGHER = easier to stop (0.3-2.0) degrees
-#define MIN_SENSITIVITY 0.5  // Slowest speed: LOWER = more precise (0.1-0.5)
-#define MAX_SENSITIVITY 10.0   // Fastest speed: LOWER = more controlled (4.0-15.0)
-
-//  PRECISION SETTINGS (FOR MINUTE MOVEMENTS)
-#define PRECISION_ZONE 4.0        // Precision angle range: HIGHER = more precision zone (1.0-4.0)
-#define PRECISION_MULTIPLIER 0.1  // Precision sensitivity: LOWER = more precise (0.2-0.6)
+#define MOUSE_UPDATE_RATE 8   // Update frequency: LOWER = faster updates (8-20)
+#define DEADZONE 5.0f         // Rest zone: HIGHER = easier to stop (0.3-2.0) degrees
+#define MIN_SENSITIVITY 0.5   // Slowest speed: LOWER = more precise (0.1-0.5)
+#define MAX_SENSITIVITY 10.0  // Fastest speed: LOWER = more controlled (4.0-15.0)
 
 //  SMOOTHING SETTINGS (FOR RESPONSIVENESS)
 #define MOVEMENT_SMOOTHING 0.80  // Movement filter: LOWER = more responsive (0.5-0.85)
 #define VELOCITY_DECAY 0.80      // Stop speed: LOWER = stops faster (0.7-0.9)
 #define STOP_THRESHOLD 0.2       // Complete stop point: LOWER = stops sooner (0.1-0.5)
 
-//  ACCELERATION SETTINGS
-#define ACCEL_CURVE 2.5       // Acceleration curve: HIGHER = faster acceleration (1.5-4.0)
-#define ACCEL_MULTIPLIER 2.5  // Acceleration strength: HIGHER = more acceleration (2.0-4.0)
+//  RATE DEFINING SETTINGS
+#define MAX_TILT_ANGLE 30.0f      // Maximum head tilt: LOWER = shorter range (15.0-30.0)
+#define ACCEL_CURVE 2.5           // Acceleration curve: HIGHER = faster acceleration (1.5-4.0)
+#define ACCEL_MULTIPLIER 3.5      // Acceleration strength: HIGHER = more acceleration (2.0-4.0)
+#define X_SENSITIVITY_SCALE 2.0f  // Extra X-axis multiplier to balance horizontal vs vertical range
 
-//  RANGE / GYRO SETTINGS
-#define MAX_RATE 60.0         // deg/s mapped to MAX_SENSITIVITY (replaces MAX_TILT_ANGLE)
-#define GYRO_DEADZONE 5.0      // deg/s below this = no movement (rest creep guard)
+//  CALIBRATION SETTINGS
 #define GYRO_BIAS_SAMPLES 200  // samples averaged for bias at rest
-#define GESTURE_MIN_RATE 15.0  // deg/s a gesture must exceed to be valid
-
 // ===== JAW CLENCH CONFIGURATION =====
-#define JAW_THRESHOLD 40.0      // Jaw clench detection threshold
-#define JAW_DEBOUNCE_MS 500     // Debounce time for jaw clench
-#define JAW_OFF_THRESHOLD 30.0  // Hysteresis: must fall below this to re-arm
+#define JAW_THRESHOLD 30.0      // Jaw clench detection threshold
+#define JAW_DEBOUNCE_MS 50      // Debounce time for jaw clench
+#define JAW_OFF_THRESHOLD 25.0  // Hysteresis: must fall below this to re-arm
 
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -82,12 +76,12 @@ uint32_t imuAddress = 0x68;
 #define VIBRATION_PIN 7  // Vibration motor for calibration feedback
 
 // ── DEBUG ENABLE ──
-#define DEBUG_ENABLE 1  // Set to 1 to enable debug prints, 0 to disable
+#define DEBUG_ENABLE 0  // Set to 1 to enable debug prints, 0 to disable
 
 // ─── BMI270 Variables (using Accelerometer) ───
 BMI270 imu;
 
-// Mouse control variables (gyro rate based)
+// Mouse control variables
 bool isIMUCalibrated = false;
 unsigned long lastMouseUpdate = 0;
 
@@ -100,6 +94,7 @@ int xAxisIndex = 0;
 int xAxisSign = 1;  // horizontal (head turn)
 int yAxisIndex = 1;
 int yAxisSign = 1;  // vertical   (head nod)
+int gravAxisIndex;
 bool axisCalibrated = false;
 
 // ── GESTURE ACCUMULATION (during calibration) ──
@@ -108,28 +103,31 @@ unsigned long lastGyroMicros = 0;
 
 // ── BIAS SAMPLING ──
 int biasSampleCount = 0;
-float biasSum[3] = { 0, 0, 0 };
+float biasSumGyro[3] = { 0, 0, 0 };
+float biasSumAcc[3] = { 0, 0, 0 };  // For Acceleration
 
-// ── CACHED GYRO DATA (read ONCE per loop tick, reused everywhere) ──
+// ── GLOBALLY STORE GYRO DATA (to avoid multiple sensor data calls) ──
 float readingsGyro[3] = { 0, 0, 0 };
-bool readingsGyroValid = false;
+
+// ── GLOBALLY STORE ACCELERATION DATA (to avoid multiple sensor data calls) ──
+float readingsAcc[3] = { 0, 0, 0 };
+
+// ── NEUTRAL ACCELEROMETER REFERENCE (captured at end of calibration) ──
+float neutralPitch = 0;
+float neutralRoll = 0;
 
 // ── VELOCITY SMOOTHING ──
-float smoothRateX = 0, smoothRateY = 0;
-float mouseVelX = 0, mouseVelY = 0;     
-float mouseAccumX = 0, mouseAccumY = 0; 
+float mouseVelX = 0, mouseVelY = 0;
+float mouseAccumX = 0, mouseAccumY = 0;
 
 // ── NON-BLOCKING CALIBRATION STATE MACHINE ──
-enum CalibrationState
-{
+enum CalibrationState {
   CAL_IDLE,
   CAL_INIT_WAIT,
   CAL_UP_VIBRATE,
   CAL_UP_WAIT,
-  CAL_CENTER_WAIT1,
   CAL_LEFT_VIBRATE,
   CAL_LEFT_WAIT,
-  CAL_CENTER_WAIT2,
   CAL_NEUTRAL_SAMPLE,
   CAL_COMPLETE
 };
@@ -146,18 +144,17 @@ unsigned long calStateStartTime = 0;
 #define ENVELOPE_WINDOW_SIZE ((ENVELOPE_WINDOW_MS * SAMPLE_RATE) / 1000)
 
 // Double/Triple Blink Configuration
-const unsigned long BLINK_DEBOUNCE_MS = 250;
-const unsigned long DOUBLE_BLINK_MS = 600;
+const unsigned long BLINK_DEBOUNCE_MS = 50;
+const unsigned long DOUBLE_BLINK_MS = 300;
 unsigned long lastBlinkTime = 0;
 unsigned long firstBlinkTime = 0;
 unsigned long secondBlinkTime = 0;
-unsigned long triple_blink_ms = 800;
+const unsigned long TRIPLE_BLINK_MS = 500;
 int blinkCount = 0;
 bool blinkActive = false;
 
 // Jaw clench variables
 unsigned long lastJawClenchTime = 0;
-
 bool jawState = false;            // true = currently in a clench
 bool jawClenchTriggered = false;  // true if clench already triggered for current press
 
@@ -165,7 +162,7 @@ float envelopeBuffer[ENVELOPE_WINDOW_SIZE] = { 0 };
 int envelopeIndex = 0;
 float envelopeSum = 0;
 float currentEEGEnvelope = 0;
-float BlinkThreshold = 50.0;
+float blinkThreshold = 30.0;
 
 // Jaw envelope buffer (separate for jaw detection)
 float jawEnvelopeBuffer[ENVELOPE_WINDOW_SIZE] = { 0 };
@@ -183,7 +180,6 @@ LedState ledState = LED_RED;
 unsigned long lastCmdSentMs = 0;
 uint32_t lastPixel0Color = 0xFFFFFFFF;
 static bool pixelDirty = false;
-
 
 #define BATTERY_VOLTAGE_PIN A6
 static const unsigned long BATTERY_CHECK_INTERVAL = 10000;
@@ -227,8 +223,7 @@ void debugPrintValue(const char *label, float value) {
 
 // ─── FILTERS ───
 // Band-Stop Butterworth IIR digital filter (50Hz notch)
-class NotchFilter
-{
+class NotchFilter {
 private:
   struct BiquadState {
     float z1 = 0, z2 = 0;
@@ -237,8 +232,7 @@ private:
   BiquadState state1;
 
 public:
-  float process(float input)
-  {
+  float process(float input) {
     float output = input;
 
     float x0 = output - (-1.58696045f * state0.z1) - (0.96505858f * state0.z2);
@@ -254,16 +248,14 @@ public:
     return output;
   }
 
-  void reset()
-  {
+  void reset() {
     state0.z1 = state0.z2 = 0;
     state1.z1 = state1.z2 = 0;
   }
 } eegNotchFilter;
 
 // High-Pass Butterworth IIR digital filter (for EOG/blinks)
-class EOGFilter
-{
+class EOGFilter {
 private:
   struct BiquadState {
     float z1 = 0, z2 = 0;
@@ -271,8 +263,7 @@ private:
   BiquadState state0;
 
 public:
-  float process(float input)
-  {
+  float process(float input) {
     float output = input;
 
     float x0 = output - (-1.91327599f * state0.z1) - (0.91688335f * state0.z2);
@@ -283,15 +274,13 @@ public:
     return output;
   }
 
-  void reset()
-  {
+  void reset() {
     state0.z1 = state0.z2 = 0;
   }
 } eogFilter;
 
 // High-Pass Butterworth IIR for jaw clench (70Hz)
-class JawHighPassFilter
-{
+class JawHighPassFilter {
 private:
   struct BiquadState {
     float z1 = 0, z2 = 0;
@@ -299,8 +288,7 @@ private:
   BiquadState state0;
 
 public:
-  float process(float input)
-  {
+  float process(float input) {
     float output = input;
 
     float x0 = output - (-0.82523238f * state0.z1) - (0.29463653f * state0.z2);
@@ -311,15 +299,13 @@ public:
     return output;
   }
 
-  void reset()
-  {
+  void reset() {
     state0.z1 = state0.z2 = 0;
   }
 } jawHighPassFilter;
 
 // Low-Pass Butterworth IIR digital filter
-class EEGFilter
-{
+class EEGFilter {
 private:
   struct BiquadState {
     float z1 = 0, z2 = 0;
@@ -344,8 +330,7 @@ public:
 } eegFilter;
 
 // Update EEG envelope for blinks
-float updateEEGEnvelope(float sample)
-{
+float updateEEGEnvelope(float sample) {
   float absSample = fabsf(sample);
   envelopeSum -= envelopeBuffer[envelopeIndex];
   envelopeSum += absSample;
@@ -355,8 +340,7 @@ float updateEEGEnvelope(float sample)
 }
 
 // Update jaw envelope for clench detection
-float updateJawEnvelope(float sample)
-{
+float updateJawEnvelope(float sample) {
   float absSample = fabsf(sample);
   jawEnvelopeSum -= jawEnvelopeBuffer[jawEnvelopeIndex];
   jawEnvelopeSum += absSample;
@@ -366,28 +350,14 @@ float updateJawEnvelope(float sample)
 }
 
 // ─── VIBRATION FEEDBACK FUNCTIONS ───
-void startVibration()
-{
+void startVibration() {
   digitalWrite(VIBRATION_PIN, HIGH);
   debugPrint("Vibration ON");
 }
 
-void stopVibration()
-{
+void stopVibration() {
   digitalWrite(VIBRATION_PIN, LOW);
   debugPrint("Vibration OFF");
-}
-
-// Returns bias-corrected angular rates in deg/s
-void getGyroRates(float &gx, float &gy, float &gz) {
-  if (imu.getSensorData() != BMI2_OK) {
-    debugPrint("Failed to read gyro data");
-    gx = gy = gz = 0;
-    return;
-  }
-  gx = imu.data.gyroX - gyroBias[0];
-  gy = imu.data.gyroY - gyroBias[1];
-  gz = imu.data.gyroZ - gyroBias[2];
 }
 
 // Pick dominant axis from an accumulated gesture vector
@@ -404,7 +374,6 @@ void updateCalibrationStateMachine(unsigned long nowMs) {
     return;
 
   unsigned long elapsed = nowMs - calStateStartTime;
-  float gx, gy, gz;
 
   switch (calState) {
     case CAL_INIT_WAIT:
@@ -422,9 +391,9 @@ void updateCalibrationStateMachine(unsigned long nowMs) {
         unsigned long n = micros();
         float dt = (n - lastGyroMicros) / 1000000.0f;
         lastGyroMicros = n;
-        gx = readingsGyro[0];
-        gy = readingsGyro[1];
-        gz = readingsGyro[2];
+        float gx = readingsGyro[0];
+        float gy = readingsGyro[1];
+        float gz = readingsGyro[2];
         gestureSum[0] += gx * dt;
         gestureSum[1] += gy * dt;
         gestureSum[2] += gz * dt;
@@ -432,8 +401,8 @@ void updateCalibrationStateMachine(unsigned long nowMs) {
           stopVibration();
           resolveAxis(gestureSum, yAxisIndex, yAxisSign);
           yAxisSign = -yAxisSign;
-          debugPrintValue("Y axis index", yAxisIndex);
-          debugPrintValue("Y axis sign", yAxisSign);
+          Serial.print(yAxisIndex);
+          Serial.print(yAxisSign);
           calState = CAL_UP_WAIT;
           calStateStartTime = nowMs;
         }
@@ -455,10 +424,9 @@ void updateCalibrationStateMachine(unsigned long nowMs) {
         unsigned long n = micros();
         float dt = (n - lastGyroMicros) / 1000000.0f;
         lastGyroMicros = n;
-        // getGyroRates(gx, gy, gz);
-        gx = readingsGyro[0];
-        gy = readingsGyro[1];
-        gz = readingsGyro[2];
+        float gx = readingsGyro[0];
+        float gy = readingsGyro[1];
+        float gz = readingsGyro[2];
         gestureSum[0] += gx * dt;
         gestureSum[1] += gy * dt;
         gestureSum[2] += gz * dt;
@@ -466,8 +434,8 @@ void updateCalibrationStateMachine(unsigned long nowMs) {
           stopVibration();
           resolveAxis(gestureSum, xAxisIndex, xAxisSign);
           xAxisSign = -xAxisSign;
-          debugPrintValue("X axis index", xAxisIndex);
-          debugPrintValue("X axis sign", xAxisSign);
+          Serial.println(xAxisIndex);
+          Serial.println(xAxisSign);
           if (xAxisIndex == yAxisIndex)
             debugPrint("Both axes coincide - Calibration FAILED");
 
@@ -482,7 +450,8 @@ void updateCalibrationStateMachine(unsigned long nowMs) {
     case CAL_LEFT_WAIT:
       if (elapsed >= 2000) {  // 2 second wait to return to center
         biasSampleCount = 0;
-        biasSum[0] = biasSum[1] = biasSum[2] = 0;
+        biasSumGyro[0] = biasSumGyro[1] = biasSumGyro[2] = 0;
+        biasSumAcc[0] = biasSumAcc[1] = biasSumAcc[2] = 0;
         calState = CAL_NEUTRAL_SAMPLE;
         calStateStartTime = nowMs;
         debugPrint("LEFT_WAIT complete, moving to NEUTRAL_SAMPLE");
@@ -492,23 +461,41 @@ void updateCalibrationStateMachine(unsigned long nowMs) {
     case CAL_NEUTRAL_SAMPLE:
       if (biasSampleCount < GYRO_BIAS_SAMPLES) {
         if (imu.getSensorData() == BMI2_OK) {
-          biasSum[0] += imu.data.gyroX;
-          biasSum[1] += imu.data.gyroY;
-          biasSum[2] += imu.data.gyroZ;
-          biasSampleCount++;
+          biasSumGyro[0] += imu.data.gyroX;
+          biasSumGyro[1] += imu.data.gyroY;
+          biasSumGyro[2] += imu.data.gyroZ;
 
+          biasSumAcc[0] += imu.data.accelX;
+          biasSumAcc[1] += imu.data.accelY;
+          biasSumAcc[2] += imu.data.accelZ;
+          // We just need the last stable reading, update each sample
+          biasSampleCount++;
           if (biasSampleCount % 20 == 0)
             debugPrintValue("Bias sample count", biasSampleCount);
         }
       } else {
-        gyroBias[0] = biasSum[0] / biasSampleCount;
-        gyroBias[1] = biasSum[1] / biasSampleCount;
-        gyroBias[2] = biasSum[2] / biasSampleCount;
-        smoothRateX = smoothRateY = 0;
+        gyroBias[0] = biasSumGyro[0] / biasSampleCount;
+        gyroBias[1] = biasSumGyro[1] / biasSampleCount;
+        gyroBias[2] = biasSumGyro[2] / biasSampleCount;
+
+        float accBias[3];
+        accBias[0] = biasSumAcc[0] / biasSampleCount;
+        accBias[1] = biasSumAcc[1] / biasSampleCount;
+        accBias[2] = biasSumAcc[2] / biasSampleCount;
+
+        // ── Capture neutral accel projection on calibrated axes ──
+        {
+          gravAxisIndex = 3 - xAxisIndex - yAxisIndex;
+          float fwd = accBias[yAxisIndex] * yAxisSign;
+          float side = accBias[xAxisIndex] * xAxisSign;
+          float grav = accBias[gravAxisIndex];
+          neutralPitch = atan2(-fwd, sqrt(side * side + grav * grav)) * 180.0 / PI;
+          neutralRoll = atan2(side, sqrt(fwd * fwd + grav * grav)) * 180.0 / PI;
+        }
+
         isIMUCalibrated = true;
         calState = CAL_COMPLETE;
 
-        // Give completion feedback (3 short vibrations)
         for (int i = 0; i < 3; i++) {
           startVibration();
           delay(100);
@@ -517,114 +504,84 @@ void updateCalibrationStateMachine(unsigned long nowMs) {
         }
       }
       break;
-
-    default:
-      break;
   }
 }
 
-// To map 
-float mapRateToMouse(float rate) {
-  if (rate == 0) return 0;
+// To map
+float mapAngleToMouse(float Angle) {
+  float absAngle = fabs(Angle);
+  float sign = (Angle > 0) ? 1.0f : -1.0f;
+  float norm = constrain(absAngle / (MAX_TILT_ANGLE - DEADZONE), 0.0f, 1.0f);
+  if (absAngle <= DEADZONE) return 0;
+  float accel = pow(norm, ACCEL_CURVE);
+  float speed = MIN_SENSITIVITY + (MAX_SENSITIVITY - MIN_SENSITIVITY) * accel * ACCEL_MULTIPLIER;
+  return sign * speed;
+}
 
-  float absRate = fabs(rate);
-  float sign = (rate > 0) ? 1.0f : -1.0f;
-  float norm = constrain(absRate / MAX_RATE, 0.0f, 1.0f);
+void getAccelerometerAngles(float &pitch, float &roll) {
+  float fwd = readingsAcc[xAxisIndex] * xAxisSign;   // nod axis  -> pitch
+  float side = readingsAcc[yAxisIndex] * yAxisSign;  // turn axis -> roll
+  float grav = readingsAcc[gravAxisIndex];           // gravity axis
 
-  float sensitivity;
-  if (absRate <= PRECISION_ZONE) 
-  {
-    sensitivity = MIN_SENSITIVITY * PRECISION_MULTIPLIER * (absRate / PRECISION_ZONE);
-  } else {
-    float accel = pow(norm, ACCEL_CURVE);
-    sensitivity = MIN_SENSITIVITY + (MAX_SENSITIVITY - MIN_SENSITIVITY) * accel * ACCEL_MULTIPLIER;
-  }
-  return sign * sensitivity;
+  pitch = atan2(-fwd, sqrt(side * side + grav * grav)) * 180.0 / PI;
+  roll = atan2(side, sqrt(fwd * fwd + grav * grav)) * 180.0 / PI;
 }
 
 void updatePrecisionMouse(unsigned long nowMs) {
-  if (!isIMUCalibrated || !axisCalibrated) {
-#if DEBUG_ENABLE
-    static bool lastPrintState = false;
-    if (!isIMUCalibrated && !lastPrintState) {
-      debugPrint("Waiting for calibration...");
-      lastPrintState = true;
-    }
-#endif
-    return;
-  }
-
-  if (nowMs - lastMouseUpdate < MOUSE_UPDATE_RATE)
-    return;
+  if (!isIMUCalibrated || !axisCalibrated) return;
+  if (nowMs - lastMouseUpdate < MOUSE_UPDATE_RATE) return;
   lastMouseUpdate = nowMs;
 
-  // Map raw gyro axes to cursor axes using learned calibration
-  float rateX = readingsGyro[xAxisIndex] * xAxisSign;
-  float rateY = readingsGyro[yAxisIndex] * yAxisSign;
+  float currentPitch, currentRoll;
+  getAccelerometerAngles(currentPitch, currentRoll);
 
-  // Deadzone (kills rest creep / drift)
-  if (fabs(rateX) < GYRO_DEADZONE) rateX = 0;
-  if (fabs(rateY) < GYRO_DEADZONE) rateY = 0;
+  float deltaPitch = currentPitch - neutralPitch;
+  float deltaRoll = currentRoll - neutralRoll;
+  Serial.print("DeltaPitch");
+  Serial.println(deltaPitch);
+  Serial.print("DeltaRoll");
+  Serial.println(deltaRoll);
+  if (fabs(deltaPitch) < DEADZONE) deltaPitch = 0;
+  if (fabs(deltaRoll) < DEADZONE) deltaRoll = 0;
 
-  // Light smoothing for jitter
-  smoothRateX = MOVEMENT_SMOOTHING * smoothRateX + (1.0f - MOVEMENT_SMOOTHING) * rateX;
-  smoothRateY = MOVEMENT_SMOOTHING * smoothRateY + (1.0f - MOVEMENT_SMOOTHING) * rateY;
+  float targetVelX = mapAngleToMouse(deltaRoll);
+  float targetVelY = mapAngleToMouse(deltaPitch);
 
-  float targetVelX = mapRateToMouse(smoothRateX);
-  float targetVelY = mapRateToMouse(smoothRateY);
-  
-  mouseVelX = mouseVelX * 0.8f + targetVelX * 0.2f;
-  mouseVelY = mouseVelY * 0.8f + targetVelY * 0.2f;
+  mouseVelX = MOVEMENT_SMOOTHING * mouseVelX + (1.0f - MOVEMENT_SMOOTHING) * targetVelX;
+  mouseVelY = MOVEMENT_SMOOTHING * mouseVelY + (1.0f - MOVEMENT_SMOOTHING) * targetVelY;
 
-  if (rateX == 0) {
+  if (fabs(targetVelX) < 0.01f) {
     mouseVelX *= VELOCITY_DECAY;
     if (fabs(mouseVelX) < STOP_THRESHOLD) mouseVelX = 0;
   }
-  if (rateY == 0) {
+  if (fabs(targetVelY) < 0.01f) {
     mouseVelY *= VELOCITY_DECAY;
     if (fabs(mouseVelY) < STOP_THRESHOLD) mouseVelY = 0;
   }
 
-int finalMouseX = (int)mouseVelX;
-int finalMouseY = (int)mouseVelY;
   mouseAccumX += mouseVelX;
   mouseAccumY += mouseVelY;
-  mouseAccumX -= finalMouseX;           // carry fraction to next frame
+  int finalMouseX = (int)mouseAccumX;
+  int finalMouseY = (int)mouseAccumY;
+  mouseAccumX -= finalMouseX;
   mouseAccumY -= finalMouseY;
 
-// #if DEBUG_ENABLE
-//   static int debugCounter = 0;
-//   if (debugCounter++ % 50 == 0) {
-//     Serial.print("Rate - X: ");
-//     Serial.print(smoothRateX);
-//     Serial.print(", Y: ");
-//     Serial.print(smoothRateY);
-//     Serial.print(" | Mouse - X: ");
-//     Serial.print(finalMouseX);
-//     Serial.print(", Y: ");
-//     Serial.println(finalMouseY);
-//   }
-// #endif
-
-
-Mouse.move(finalMouseX, finalMouseY);
-Serial.print(finalMouseX);
-Serial.print(" , ");
-Serial.println(finalMouseY);
-lastCmdSentMs = millis();
-ledState = LED_BLUE_FADE;
-  
+  if (finalMouseX != 0 || finalMouseY != 0) {
+    Mouse.move(finalMouseX, finalMouseY);
+    lastCmdSentMs = millis();
+    ledState = LED_BLUE_FADE;
+  }
 }
 
 // ========== JAW CLENCH DETECTION ==========
 void handleJawClench(unsigned long nowMs) {
+  if (!isIMUCalibrated || !axisCalibrated) return;
   if (!jawState) {
     // Not currently clenching - check for threshold crossing
     if (currentJawEnvelope > JAW_THRESHOLD && (nowMs - lastJawClenchTime) >= JAW_DEBOUNCE_MS) {
       jawState = true;
       jawClenchTriggered = false;  // Not triggered yet for this press
       lastJawClenchTime = nowMs;
-      debugPrint("Jaw clench START");
     }
   } else {
     // Currently in clench state
@@ -654,7 +611,8 @@ void handleJawClench(unsigned long nowMs) {
 
 // ========== BLINK DETECTION (for triple blink = right click) ==========
 void handleBlinks(unsigned long nowMs) {
-  bool envelopeHigh = currentEEGEnvelope > BlinkThreshold;
+  if (!isIMUCalibrated || !axisCalibrated) return;
+  bool envelopeHigh = currentEEGEnvelope > blinkThreshold;
   if (!blinkActive && envelopeHigh && (nowMs - lastBlinkTime) >= BLINK_DEBOUNCE_MS) {
     lastBlinkTime = nowMs;
     if (blinkCount == 0) {
@@ -665,7 +623,7 @@ void handleBlinks(unsigned long nowMs) {
       secondBlinkTime = nowMs;
       blinkCount = 2;
       debugPrint("Second blink detected");
-    } else if (blinkCount == 2 && (nowMs - secondBlinkTime) <= triple_blink_ms) {
+    } else if (blinkCount == 2 && (nowMs - secondBlinkTime) <= TRIPLE_BLINK_MS) {
       // Triple blink detected -> Right mouse click
       Mouse.click(MOUSE_RIGHT);
       lastCmdSentMs = millis();
@@ -686,7 +644,7 @@ void handleBlinks(unsigned long nowMs) {
   }
 
   // Double blink timeout (no action for double blink - only triple blink does right click)
-  if (blinkCount == 2 && (nowMs - secondBlinkTime) > triple_blink_ms) {
+  if (blinkCount == 2 && (nowMs - secondBlinkTime) > TRIPLE_BLINK_MS) {
     blinkCount = 0;
     debugPrint("Double blink timeout - no action");
   }
@@ -768,8 +726,7 @@ void updateBLELed() {
 }
 
 // ─── setup() ───
-void setup()
-{
+void setup() {
   Serial.begin(115200);
   delay(2000);
 
@@ -850,13 +807,8 @@ void loop() {
     ledState = connected ? LED_GREEN : LED_RED;
     pixelDirty = true;
   }
-  bool imuConnect;
-  Wire.beginTransmission(imuAddress);
-  if (!Wire.endTransmission()) {
-    imuConnect = true;
-  } else {
-    imuConnect = false;
-  }
+  Wire.beginTransmission(IMU_ADDRESS);
+  bool imuConnect = !Wire.endTransmission();
   static bool lastIMUconnectStatus = false;
   if (imuConnect != lastIMUconnectStatus) {
     lastIMUconnectStatus = imuConnect;
@@ -870,8 +822,6 @@ void loop() {
       axisCalibrated = false;
       calState = CAL_IDLE;
 
-      smoothRateX = 0;
-      smoothRateY = 0;
       mouseVelX = 0;
       mouseVelY = 0;
       mouseAccumX = 0;
@@ -931,7 +881,9 @@ void loop() {
     readingsGyro[0] = imu.data.gyroX - gyroBias[0];
     readingsGyro[1] = imu.data.gyroY - gyroBias[1];
     readingsGyro[2] = imu.data.gyroZ - gyroBias[2];
-    readingsGyroValid = true;
+    readingsAcc[0] = imu.data.accelX;
+    readingsAcc[1] = imu.data.accelY;
+    readingsAcc[2] = imu.data.accelZ;
 
     // NON-BLOCKING CALIBRATION UPDATE
     updateCalibrationStateMachine(nowMs);
@@ -952,7 +904,7 @@ void loop() {
     // 4) Process for jaw clench detection (high frequency - 70Hz HPF)
     float jawFiltered = jawHighPassFilter.process(notchFiltered);
     currentJawEnvelope = updateJawEnvelope(jawFiltered);
-
+    Serial.println(currentJawEnvelope);
     handleJawClench(nowMs);
     handleBlinks(nowMs);
 
@@ -965,7 +917,7 @@ void loop() {
       Serial.print(" | Jaw Envelope: ");
       Serial.print(currentJawEnvelope);
       Serial.print(" | Thresholds - Blink: ");
-      Serial.print(BlinkThreshold);
+      Serial.print(blinkThreshold);
       Serial.print(", Jaw: ");
       Serial.println(JAW_THRESHOLD);
     }
@@ -1008,17 +960,11 @@ void loop() {
       case CAL_UP_WAIT:
         Serial.println("UP_WAIT");
         break;
-      case CAL_CENTER_WAIT1:
-        Serial.println("CENTER_WAIT1");
-        break;
       case CAL_LEFT_VIBRATE:
         Serial.println("LEFT_VIBRATE");
         break;
       case CAL_LEFT_WAIT:
         Serial.println("LEFT_WAIT");
-        break;
-      case CAL_CENTER_WAIT2:
-        Serial.println("CENTER_WAIT2");
         break;
       case CAL_NEUTRAL_SAMPLE:
         Serial.println("NEUTRAL_SAMPLE");
