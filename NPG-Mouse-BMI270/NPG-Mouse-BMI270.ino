@@ -21,24 +21,14 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <BleCombo.h>
-#include <Adafruit_NeoPixel.h>
 
-// ── BMI270 Includes (with Accelerometer) ──
+// ── BMI270 Includes ──
 #include <SparkFun_BMI270_Arduino_Library.h>
-
-#define PIXEL_PIN 15
-#define PIXEL_COUNT 6
-Adafruit_NeoPixel pixel(PIXEL_COUNT, PIXEL_PIN, NEO_GRB + NEO_KHZ800);
-#define BLE_LED 0
-#define BATTERY_LED 5
-#define IMU_LED 3
-#define BLUE_LED_DURATION 100
-uint32_t imuAddress = 0x68;
 
 // ══════════════════════════════════════════════════════════════════════════════
 // ─── CONTROL MAPPING CONFIGURATION ───
 // ══════════════════════════════════════════════════════════════════════════════
-// Head movement (accelerometer) -> Mouse cursor movement (POSITION HOLD)
+// Head movement (gyro rate) -> Mouse cursor movement
 // Jaw Clench -> Left mouse click
 // Triple blink -> Right mouse click
 
@@ -47,9 +37,8 @@ uint32_t imuAddress = 0x68;
 // ══════════════════════════════════════════════════════════════════════════════
 
 //  BASIC SETTINGS (ADJUST THESE TO FINE-TUNE)
-#define MOUSE_UPDATE_RATE 8  // Update frequency: LOWER = faster updates (8-20)
-#define DEADZONE 0.3          // Rest zone: HIGHER = easier to stop (0.3-2.0) degrees
-#define MIN_SENSITIVITY 0.5  // Slowest speed: LOWER = more precise (0.1-0.5)
+#define MOUSE_UPDATE_RATE 8    // Update frequency: LOWER = faster updates (8-20)
+#define MIN_SENSITIVITY 0.5    // Slowest speed: LOWER = more precise (0.1-0.5)
 #define MAX_SENSITIVITY 10.0   // Fastest speed: LOWER = more controlled (4.0-15.0)
 
 //  PRECISION SETTINGS (FOR MINUTE MOVEMENTS)
@@ -66,10 +55,9 @@ uint32_t imuAddress = 0x68;
 #define ACCEL_MULTIPLIER 2.5  // Acceleration strength: HIGHER = more acceleration (2.0-4.0)
 
 //  RANGE / GYRO SETTINGS
-#define MAX_RATE 60.0         // deg/s mapped to MAX_SENSITIVITY (replaces MAX_TILT_ANGLE)
+#define MAX_RATE 60.0          // deg/s mapped to MAX_SENSITIVITY
 #define GYRO_DEADZONE 5.0      // deg/s below this = no movement (rest creep guard)
 #define GYRO_BIAS_SAMPLES 200  // samples averaged for bias at rest
-#define GESTURE_MIN_RATE 15.0  // deg/s a gesture must exceed to be valid
 
 // ===== JAW CLENCH CONFIGURATION =====
 #define JAW_THRESHOLD 40.0      // Jaw clench detection threshold
@@ -84,10 +72,9 @@ uint32_t imuAddress = 0x68;
 // ── DEBUG ENABLE ──
 #define DEBUG_ENABLE 1  // Set to 1 to enable debug prints, 0 to disable
 
-// ─── BMI270 Variables (using Accelerometer) ───
+// ─── BMI270 ───
 BMI270 imu;
 
-// Mouse control variables (gyro rate based)
 bool isIMUCalibrated = false;
 unsigned long lastMouseUpdate = 0;
 
@@ -112,12 +99,11 @@ float biasSum[3] = { 0, 0, 0 };
 
 // ── CACHED GYRO DATA (read ONCE per loop tick, reused everywhere) ──
 float readingsGyro[3] = { 0, 0, 0 };
-bool readingsGyroValid = false;
 
 // ── VELOCITY SMOOTHING ──
 float smoothRateX = 0, smoothRateY = 0;
-float mouseVelX = 0, mouseVelY = 0;     
-float mouseAccumX = 0, mouseAccumY = 0; 
+float mouseVelX = 0, mouseVelY = 0;
+float mouseAccumX = 0, mouseAccumY = 0;
 
 // ── NON-BLOCKING CALIBRATION STATE MACHINE ──
 enum CalibrationState {
@@ -125,10 +111,8 @@ enum CalibrationState {
   CAL_INIT_WAIT,
   CAL_UP_VIBRATE,
   CAL_UP_WAIT,
-  CAL_CENTER_WAIT1,
   CAL_LEFT_VIBRATE,
   CAL_LEFT_WAIT,
-  CAL_CENTER_WAIT2,
   CAL_NEUTRAL_SAMPLE,
   CAL_COMPLETE
 };
@@ -138,7 +122,7 @@ unsigned long calStateStartTime = 0;
 
 // ─── EEG Signal processing config ───
 #define SAMPLE_RATE 512
-#define INPUT_PIN1 A0  // EEG input only (also used for jaw clench)
+#define INPUT_PIN1 A0  // EEG input (also used for jaw clench)
 
 // EEG Envelope Configuration for blink detection
 #define ENVELOPE_WINDOW_MS 100
@@ -170,37 +154,6 @@ float jawEnvelopeBuffer[ENVELOPE_WINDOW_SIZE] = { 0 };
 int jawEnvelopeIndex = 0;
 float jawEnvelopeSum = 0;
 float currentJawEnvelope = 0;
-
-// ── BLE LED state machine ──
-enum LedState {
-  LED_RED,
-  LED_GREEN,
-  LED_BLUE_FADE
-};
-LedState ledState = LED_RED;
-unsigned long lastCmdSentMs = 0;
-uint32_t lastPixel0Color = 0xFFFFFFFF;
-static bool pixelDirty = false;
-
-#define BATTERY_VOLTAGE_PIN A6
-#define BATTERY_LED 5
-static const unsigned long BATTERY_CHECK_INTERVAL = 10000;
-static unsigned long lastBatteryCheck = -10000;
-uint32_t batteryColor = 0;
-static uint32_t batteryWinSum = 0;
-static uint16_t batteryWinCount = 0;
-static int lastBatteryPct = -1;
-static uint8_t risingCount = 0;
-static const uint8_t RISING_THRESHOLD = 3;
-const float voltageLUT[] = {
-  3.27, 3.61, 3.69, 3.71, 3.73, 3.75, 3.77, 3.79, 3.80, 3.82,
-  3.84, 3.85, 3.87, 3.91, 3.95, 3.98, 4.02, 4.08, 4.11, 4.15, 4.20
-};
-const int percentLUT[] = {
-  0, 5, 10, 15, 20, 25, 30, 35, 40, 45,
-  50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100
-};
-const int lutSize = sizeof(voltageLUT) / sizeof(voltageLUT[0]);
 
 // ─── DEBUG FUNCTION ───
 void debugPrint(const char *message) {
@@ -362,18 +315,6 @@ void stopVibration() {
   debugPrint("Vibration OFF");
 }
 
-// Returns bias-corrected angular rates in deg/s
-void getGyroRates(float &gx, float &gy, float &gz) {
-  if (imu.getSensorData() != BMI2_OK) {
-    debugPrint("Failed to read gyro data");
-    gx = gy = gz = 0;
-    return;
-  }
-  gx = imu.data.gyroX - gyroBias[0];
-  gy = imu.data.gyroY - gyroBias[1];
-  gz = imu.data.gyroZ - gyroBias[2];
-}
-
 // Pick dominant axis from an accumulated gesture vector
 void resolveAxis(float sum[3], int &axisIndex, int &axisSign) {
   int a = 0;
@@ -392,7 +333,7 @@ void updateCalibrationStateMachine(unsigned long nowMs) {
 
   switch (calState) {
     case CAL_INIT_WAIT:
-      if (elapsed >= 3000) {  // 3 second initial wait
+      if (elapsed >= 3000) {
         gestureSum[0] = gestureSum[1] = gestureSum[2] = 0;
         lastGyroMicros = micros();
         calState = CAL_UP_VIBRATE;
@@ -425,7 +366,7 @@ void updateCalibrationStateMachine(unsigned long nowMs) {
       }
 
     case CAL_UP_WAIT:
-      if (elapsed >= 3000) {  // 3 second wait to return to center
+      if (elapsed >= 3000) {
         gestureSum[0] = gestureSum[1] = gestureSum[2] = 0;
         lastGyroMicros = micros();
         calState = CAL_LEFT_VIBRATE;
@@ -439,7 +380,6 @@ void updateCalibrationStateMachine(unsigned long nowMs) {
         unsigned long n = micros();
         float dt = (n - lastGyroMicros) / 1000000.0f;
         lastGyroMicros = n;
-        // getGyroRates(gx, gy, gz);
         gx = readingsGyro[0];
         gy = readingsGyro[1];
         gz = readingsGyro[2];
@@ -464,7 +404,7 @@ void updateCalibrationStateMachine(unsigned long nowMs) {
       }
 
     case CAL_LEFT_WAIT:
-      if (elapsed >= 2000) {  // 2 second wait to return to center
+      if (elapsed >= 2000) {
         biasSampleCount = 0;
         biasSum[0] = biasSum[1] = biasSum[2] = 0;
         calState = CAL_NEUTRAL_SAMPLE;
@@ -492,7 +432,6 @@ void updateCalibrationStateMachine(unsigned long nowMs) {
         isIMUCalibrated = true;
         calState = CAL_COMPLETE;
 
-        // Give completion feedback (3 short vibrations)
         for (int i = 0; i < 3; i++) {
           startVibration();
           delay(100);
@@ -507,7 +446,6 @@ void updateCalibrationStateMachine(unsigned long nowMs) {
   }
 }
 
-// To map 
 float mapRateToMouse(float rate) {
   if (rate == 0) return 0;
 
@@ -516,8 +454,7 @@ float mapRateToMouse(float rate) {
   float norm = constrain(absRate / MAX_RATE, 0.0f, 1.0f);
 
   float sensitivity;
-  if (absRate <= PRECISION_ZONE) 
-  {
+  if (absRate <= PRECISION_ZONE) {
     sensitivity = MIN_SENSITIVITY * PRECISION_MULTIPLIER * (absRate / PRECISION_ZONE);
   } else {
     float accel = pow(norm, ACCEL_CURVE);
@@ -542,21 +479,18 @@ void updatePrecisionMouse(unsigned long nowMs) {
     return;
   lastMouseUpdate = nowMs;
 
-  // Map raw gyro axes to cursor axes using learned calibration
   float rateX = readingsGyro[xAxisIndex] * xAxisSign;
   float rateY = readingsGyro[yAxisIndex] * yAxisSign;
 
-  // Deadzone (kills rest creep / drift)
   if (fabs(rateX) < GYRO_DEADZONE) rateX = 0;
   if (fabs(rateY) < GYRO_DEADZONE) rateY = 0;
 
-  // Light smoothing for jitter
   smoothRateX = MOVEMENT_SMOOTHING * smoothRateX + (1.0f - MOVEMENT_SMOOTHING) * rateX;
   smoothRateY = MOVEMENT_SMOOTHING * smoothRateY + (1.0f - MOVEMENT_SMOOTHING) * rateY;
 
   float targetVelX = mapRateToMouse(smoothRateX);
   float targetVelY = mapRateToMouse(smoothRateY);
-  
+
   mouseVelX = mouseVelX * 0.8f + targetVelX * 0.2f;
   mouseVelY = mouseVelY * 0.8f + targetVelY * 0.2f;
 
@@ -569,74 +503,47 @@ void updatePrecisionMouse(unsigned long nowMs) {
     if (fabs(mouseVelY) < STOP_THRESHOLD) mouseVelY = 0;
   }
 
-int finalMouseX = (int)mouseVelX;
-int finalMouseY = (int)mouseVelY;
   mouseAccumX += mouseVelX;
   mouseAccumY += mouseVelY;
-  mouseAccumX -= finalMouseX;           // carry fraction to next frame
+  int finalMouseX = (int)mouseAccumX;
+  int finalMouseY = (int)mouseAccumY;
+  mouseAccumX -= finalMouseX;
   mouseAccumY -= finalMouseY;
 
-// #if DEBUG_ENABLE
-//   static int debugCounter = 0;
-//   if (debugCounter++ % 50 == 0) {
-//     Serial.print("Rate - X: ");
-//     Serial.print(smoothRateX);
-//     Serial.print(", Y: ");
-//     Serial.print(smoothRateY);
-//     Serial.print(" | Mouse - X: ");
-//     Serial.print(finalMouseX);
-//     Serial.print(", Y: ");
-//     Serial.println(finalMouseY);
-//   }
-// #endif
-
-
-Mouse.move(finalMouseX, finalMouseY);
-Serial.print(finalMouseX);
-Serial.print(" , ");
-Serial.println(finalMouseY);
-lastCmdSentMs = millis();
-ledState = LED_BLUE_FADE;
-  
+  Mouse.move(finalMouseX, finalMouseY);
+#if DEBUG_ENABLE
+  Serial.print(finalMouseX);
+  Serial.print(" , ");
+  Serial.println(finalMouseY);
+#endif
 }
 
 // ========== JAW CLENCH DETECTION ==========
 void handleJawClench(unsigned long nowMs) {
   if (!jawState) {
-    // Not currently clenching - check for threshold crossing
     if (currentJawEnvelope > JAW_THRESHOLD && (nowMs - lastJawClenchTime) >= JAW_DEBOUNCE_MS) {
       jawState = true;
-      jawClenchTriggered = false;  // Not triggered yet for this press
+      jawClenchTriggered = false;
       lastJawClenchTime = nowMs;
       debugPrint("Jaw clench START");
     }
   } else {
-    // Currently in clench state
     if (!jawClenchTriggered) {
-      // This is the first time we're detecting this clench
-      // Send left mouse click
       Mouse.click(MOUSE_LEFT);
-      lastCmdSentMs = millis();
-      ledState = LED_BLUE_FADE;
-
       jawClenchTriggered = true;
       debugPrint("Jaw clench - Left click!");
-
-      // Visual feedback (vibration)
       startVibration();
       delay(50);
       stopVibration();
     }
-
-    // Check if jaw clench has ended
     if (currentJawEnvelope < JAW_OFF_THRESHOLD) {
       jawState = false;
-      debugPrint(" Jaw clench END");
+      debugPrint("Jaw clench END");
     }
   }
 }
 
-// ========== BLINK DETECTION (for triple blink = right click) ==========
+// ========== BLINK DETECTION (triple blink = right click) ==========
 void handleBlinks(unsigned long nowMs) {
   bool envelopeHigh = currentEEGEnvelope > BlinkThreshold;
   if (!blinkActive && envelopeHigh && (nowMs - lastBlinkTime) >= BLINK_DEBOUNCE_MS) {
@@ -650,11 +557,7 @@ void handleBlinks(unsigned long nowMs) {
       blinkCount = 2;
       debugPrint("Second blink detected");
     } else if (blinkCount == 2 && (nowMs - secondBlinkTime) <= triple_blink_ms) {
-      // Triple blink detected -> Right mouse click
       Mouse.click(MOUSE_RIGHT);
-      lastCmdSentMs = millis();
-      ledState = LED_BLUE_FADE;
-
       blinkCount = 0;
       debugPrint("Triple blink - Right click!");
     } else {
@@ -669,85 +572,12 @@ void handleBlinks(unsigned long nowMs) {
     blinkActive = false;
   }
 
-  // Double blink timeout (no action for double blink - only triple blink does right click)
   if (blinkCount == 2 && (nowMs - secondBlinkTime) > triple_blink_ms) {
     blinkCount = 0;
     debugPrint("Double blink timeout - no action");
   }
-  // Single blink timeout
   if (blinkCount == 1 && (nowMs - firstBlinkTime) > DOUBLE_BLINK_MS) {
     blinkCount = 0;
-  }
-}
-
-float interpolatePercentage(float voltage) {
-  if (voltage <= voltageLUT[0])
-    return 0;
-  if (voltage >= voltageLUT[lutSize - 1])
-    return 100;
-  int i = 0;
-  while (i < lutSize - 1 && voltage > voltageLUT[i + 1])
-    i++;
-  float v1 = voltageLUT[i], v2 = voltageLUT[i + 1];
-  int p1 = percentLUT[i], p2 = percentLUT[i + 1];
-  return p1 + (voltage - v1) * (p2 - p1) / (v2 - v1);
-}
-
-int getCurrentBatteryPercentage() {
-  float avgRaw = (batteryWinCount > 0) ? (batteryWinSum / batteryWinCount) : analogRead(BATTERY_VOLTAGE_PIN);
-  batteryWinSum = 0;
-  batteryWinCount = 0;
-  float voltage = (avgRaw / 1000.0) * 2;
-  voltage += 0.022;
-  float percentage = interpolatePercentage(voltage);
-  if (lastBatteryPct == -1) {
-    lastBatteryPct = (int)percentage;
-  } else if ((int)percentage < lastBatteryPct) {
-    lastBatteryPct = (int)percentage;
-    risingCount = 0;
-  } else if ((int)percentage > lastBatteryPct) {
-    risingCount++;
-    if (risingCount >= RISING_THRESHOLD) {
-      lastBatteryPct = (int)percentage;
-      risingCount = 0;
-    }
-  } else {
-    risingCount = 0;
-  }
-  return lastBatteryPct;
-}
-
-void updateIMULed(bool connectionStatus) {
-  uint32_t color;
-
-  if (!connectionStatus) {
-    color = pixel.Color(20, 0, 0);  // Red = IMU communication failed
-  } else {
-    color = pixel.Color(0, 20, 0);  // Green = ready
-  }
-
-  pixel.setPixelColor(IMU_LED, color);
-}
-
-void updateBLELed() {
-  uint32_t color;
-  if (ledState == LED_RED) {
-    color = pixel.Color(20, 0, 0);
-  } else if (ledState == LED_GREEN) {
-    color = pixel.Color(0, 20, 0);
-  } else {
-    unsigned long elapsed = millis() - lastCmdSentMs;
-    if (elapsed < BLUE_LED_DURATION) {
-      color = pixel.Color(0, 0, 20);
-    } else {
-      ledState = LED_GREEN;
-      color = pixel.Color(0, 20, 0);
-    }
-  }
-  if (color != lastPixel0Color) {
-    lastPixel0Color = color;
-    pixel.setPixelColor(BLE_LED, color);
-    pixel.show();
   }
 }
 
@@ -756,61 +586,25 @@ void setup() {
   Serial.begin(115200);
   delay(2000);
 
-  pixel.begin();
-  pixel.clear();
-  int currentBattery = getCurrentBatteryPercentage();
-  if (currentBattery <= 20) {
-    batteryColor = pixel.Color(20, 0, 0);
-  } else if (currentBattery <= 70) {
-    batteryColor = pixel.Color(30, 20, 0);
-  } else {
-    batteryColor = pixel.Color(0, 20, 0);
-  }
-  pixel.setPixelColor(BATTERY_LED, batteryColor);
-
   Wire.begin(22, 23);
   while (imu.beginI2C() != BMI2_OK) {
     debugPrint("BMI270 initialization FAILED!");
-
-    static uint16_t fader = 100;
-    static bool decreasing = true;
-    pixel.setPixelColor(IMU_LED, pixel.Color(fader, 0, 0));
-    pixel.show();
-    delay(20);
-    if (decreasing) {
-      fader = fader - 2;
-      if (fader < 10) {
-        decreasing = false;
-      }
-    } else {
-      fader = fader + 2;
-      if (fader > 100) {
-        decreasing = true;
-      }
-    }
+    delay(500);
   }
 
   debugPrint("System Starting...");
-  debugPrint("Initializing I2C...");
 
   pinMode(INPUT_PIN1, INPUT);
   pinMode(VIBRATION_PIN, OUTPUT);
-
   digitalWrite(VIBRATION_PIN, LOW);
   debugPrint("Pins initialized");
 
-  debugPrint("Initializing BLE Combo...");
   Keyboard.begin();
   Mouse.begin();
   debugPrint("BLE Combo initialized");
 
-  debugPrint("Initializing BMI270...");
   debugPrint("BMI270 initialized successfully!");
 
-  updateIMULed(true);
-
-  // Give power-up indication (2 short vibrations)
-  debugPrint("Power-up vibration pulses");
   for (int i = 0; i < 2; i++) {
     startVibration();
     delay(100);
@@ -818,7 +612,6 @@ void setup() {
     delay(100);
   }
 
-  // START NON-BLOCKING CALIBRATION
   calState = CAL_INIT_WAIT;
   calStateStartTime = millis();
   debugPrint("Calibration started - Keep head still for 3 seconds");
@@ -827,77 +620,6 @@ void setup() {
 // ─── loop() ───
 void loop() {
   bool connected = Keyboard.isConnected();
-  static bool lastConnected = false;
-  if (connected != lastConnected) {
-    lastConnected = connected;
-    ledState = connected ? LED_GREEN : LED_RED;
-    pixelDirty = true;
-  }
-  bool imuConnect;
-  Wire.beginTransmission(imuAddress);
-  if (!Wire.endTransmission()) {
-    imuConnect = true;
-  } else {
-    imuConnect = false;
-  }
-  static bool lastIMUconnectStatus = false;
-  if (imuConnect != lastIMUconnectStatus) {
-    lastIMUconnectStatus = imuConnect;
-    updateIMULed(imuConnect);
-    pixelDirty = true;
-
-    if (!imuConnect) {
-      // ── IMU just DISCONNECTED ──
-      // Invalidate calibration so mouse stops moving
-      isIMUCalibrated = false;
-      axisCalibrated = false;
-      calState = CAL_IDLE;
-
-      smoothRateX = 0;
-      smoothRateY = 0;
-      mouseVelX = 0;
-      mouseVelY = 0;
-      mouseAccumX = 0;
-      mouseAccumY = 0;
-
-      eegNotchFilter.reset();
-      eogFilter.reset();
-      jawHighPassFilter.reset();
-      eegFilter.reset();
-      debugPrint("IMU disconnected - calibration invalidated");
-    } else {
-      // ── IMU just RECONNECTED ──
-      // Re-init the IMU hardware
-      if (imu.beginI2C() == BMI2_OK) {
-        debugPrint("IMU reconnected - restarting calibration");
-        calState = CAL_INIT_WAIT;
-        calStateStartTime = millis();
-      } else {
-        debugPrint("IMU reconnected but beginI2C() failed");
-      }
-    }
-  }
-
-  unsigned long currentMillis = millis();
-  if (currentMillis - lastBatteryCheck >= BATTERY_CHECK_INTERVAL) {
-    int currentBattery = getCurrentBatteryPercentage();
-    if (currentBattery <= 20) {
-      batteryColor = pixel.Color(20, 0, 0);
-    } else if (currentBattery <= 70) {
-      batteryColor = pixel.Color(30, 20, 0);
-    } else {
-      batteryColor = pixel.Color(0, 20, 0);
-    }
-    pixelDirty = true;
-    lastBatteryCheck = currentMillis;
-  }
-
-  if (pixelDirty) {
-    pixel.setPixelColor(BATTERY_LED, batteryColor);
-    lastPixel0Color = 0xFFFFFFFF;
-    pixelDirty = false;
-  }
-  updateBLELed();
 
   static unsigned long lastMicros = micros();
   unsigned long nowMs = millis();
@@ -910,36 +632,26 @@ void loop() {
   if (timer <= 0 && connected && imu.getSensorData() == BMI2_OK) {
     timer += 1000000L / SAMPLE_RATE;
 
-    // taking gyro values in global variable
     readingsGyro[0] = imu.data.gyroX - gyroBias[0];
     readingsGyro[1] = imu.data.gyroY - gyroBias[1];
     readingsGyro[2] = imu.data.gyroZ - gyroBias[2];
-    readingsGyroValid = true;
 
-    // NON-BLOCKING CALIBRATION UPDATE
     updateCalibrationStateMachine(nowMs);
 
-    // 1) EEG ADC read - only one channel
     int raw1 = analogRead(INPUT_PIN1);
-    batteryWinSum += analogRead(BATTERY_VOLTAGE_PIN);
-    batteryWinCount++;
 
-    // 2) Apply notch filter (50Hz removal)
     float notchFiltered = eegNotchFilter.process(raw1);
 
-    // 3) Process for blink detection (low frequency)
     float filteredEEG = eegFilter.process(notchFiltered);
     float filteredEOG = eogFilter.process(filteredEEG);
     currentEEGEnvelope = updateEEGEnvelope(filteredEOG);
 
-    // 4) Process for jaw clench detection (high frequency - 70Hz HPF)
     float jawFiltered = jawHighPassFilter.process(notchFiltered);
     currentJawEnvelope = updateJawEnvelope(jawFiltered);
 
     handleJawClench(nowMs);
     handleBlinks(nowMs);
 
-// Print envelopes occasionally
 #if DEBUG_ENABLE
     static int eegCounter = 0;
     if (eegCounter++ % 100 == 0) {
@@ -955,12 +667,11 @@ void loop() {
 #endif
   }
 
-  // 4) PRECISION MOUSE CONTROL (ACCELEROMETER BASED) - runs continuously
+  // PRECISION MOUSE CONTROL (GYRO RATE BASED) - runs continuously
   if (connected) {
     updatePrecisionMouse(nowMs);
   }
 
-// Print status every 5 seconds
 #if DEBUG_ENABLE
   static unsigned long lastStatusPrint = 0;
   if (millis() - lastStatusPrint > 5000) {
@@ -979,36 +690,14 @@ void loop() {
     Serial.print(", Z: ");
     Serial.println(gyroBias[2]);
     switch (calState) {
-      case CAL_IDLE:
-        Serial.println("IDLE");
-        break;
-      case CAL_INIT_WAIT:
-        Serial.println("INIT_WAIT");
-        break;
-      case CAL_UP_VIBRATE:
-        Serial.println("UP_VIBRATE");
-        break;
-      case CAL_UP_WAIT:
-        Serial.println("UP_WAIT");
-        break;
-      case CAL_CENTER_WAIT1:
-        Serial.println("CENTER_WAIT1");
-        break;
-      case CAL_LEFT_VIBRATE:
-        Serial.println("LEFT_VIBRATE");
-        break;
-      case CAL_LEFT_WAIT:
-        Serial.println("LEFT_WAIT");
-        break;
-      case CAL_CENTER_WAIT2:
-        Serial.println("CENTER_WAIT2");
-        break;
-      case CAL_NEUTRAL_SAMPLE:
-        Serial.println("NEUTRAL_SAMPLE");
-        break;
-      case CAL_COMPLETE:
-        Serial.println("COMPLETE");
-        break;
+      case CAL_IDLE:           Serial.println("IDLE"); break;
+      case CAL_INIT_WAIT:      Serial.println("INIT_WAIT"); break;
+      case CAL_UP_VIBRATE:     Serial.println("UP_VIBRATE"); break;
+      case CAL_UP_WAIT:        Serial.println("UP_WAIT"); break;
+      case CAL_LEFT_VIBRATE:   Serial.println("LEFT_VIBRATE"); break;
+      case CAL_LEFT_WAIT:      Serial.println("LEFT_WAIT"); break;
+      case CAL_NEUTRAL_SAMPLE: Serial.println("NEUTRAL_SAMPLE"); break;
+      case CAL_COMPLETE:       Serial.println("COMPLETE"); break;
     }
     Serial.println("═══════════════════════════════════");
   }
