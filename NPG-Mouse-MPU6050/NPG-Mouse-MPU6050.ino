@@ -700,7 +700,7 @@ void setup()
   }
   else if (currentBattery <= 70)
   {
-    batteryColor = pixel.Color(30, 20, 0);
+    batteryColor = pixel.Color(35, 7, 0);
   }
   else
   {
@@ -860,7 +860,7 @@ void loop()
     }
     else if (currentBattery <= 70)
     {
-      batteryColor = pixel.Color(30, 20, 0);
+      batteryColor = pixel.Color(35, 7, 0);
     }
     else
     {
@@ -873,7 +873,7 @@ void loop()
   if (pixelDirty)
   {
     pixel.setPixelColor(BATTERY_LED, batteryColor);
-    lastPixel0Color = 0xFFFFFFFF;
+    pixel.show();
     pixelDirty = false;
   }
   updateBLELed();

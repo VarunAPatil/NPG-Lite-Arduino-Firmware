@@ -138,7 +138,7 @@ void loop()
     if (pct <= 20)
       color = pixel.Color(20, 0, 0);
     else if (pct <= 70)
-      color = pixel.Color(30, 20, 0);
+      color = pixel.Color(35, 7, 0);
     else
       color = pixel.Color(0, 20, 0);
     pixel.setPixelColor(BATTERY_LED, color);

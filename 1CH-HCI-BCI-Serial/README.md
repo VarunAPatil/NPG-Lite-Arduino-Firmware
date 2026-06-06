@@ -8,7 +8,7 @@ This program demonstrates how to use a single-channel biosignal acquisition syst
 - **EOG (Electrooculography):** Detects double/triple eye blinks (EOG artifact in the EEG signal).
 - **EMG (Electromyography):** Detects jaw clench (EMG artifact in the EEG signal).
 
-The output is displayed on the Serial Monitor, showing events such as `Focussed`, `Double blink`, `Triple blink`, and `Jaw Clench`. User will have to put the program into `DEBUG` mode to calibrate the system and adjust the threshold values.
+The output is displayed on the Serial Monitor, showing events such as `Focused`, `Double blink`, `Triple blink`, and `Jaw Clench`. User will have to put the program into `DEBUG` mode to calibrate the system and adjust the threshold values.
 
 ---
 
@@ -23,15 +23,15 @@ The output is displayed on the Serial Monitor, showing events such as `Focussed`
 
 3. **Feature Extraction:**
    - **EEG:**
-     - The raw EEG signal is filtered using a 45Hz lowpass filter.
+     - The raw EEG signal is filtered using a 45Hz low-pass filter.
      - The filtered signal is then processed using FFT to calculate brain bandpowers.
      - The beta waves (13Hz - 30Hz) bandpower is monitored to detect focus.
    - **EOG:**
-     - The raw EOG signal is filtered using a 5Hz highpass filter to detect significant eye blinks.
+     - The raw EOG signal is filtered using a 5Hz high-pass filter to detect significant eye blinks.
      - A running average (envelope algorithm) is applied to the filtered EOG signal for smoothing.
      - The EOG envelope is monitored to detect double/triple eye blinks.
    - **EMG:**
-     - The raw EMG signal is filtered using a 70Hz highpass filter to detect significant muscle activity.
+     - The raw EMG signal is filtered using a 70Hz high-pass filter to detect significant muscle activity.
      - A running average (envelope algorithm) is applied to the filtered EMG signal for smoothing.
      - The EMG envelope is monitored to detect jaw clench.
 

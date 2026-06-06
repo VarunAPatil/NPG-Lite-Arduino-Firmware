@@ -1,6 +1,6 @@
 # NPG Lite Arduino Firmware
 
-**Neuro PlayGround (NPG) Lite** is an open-source neuroscience development board by [Upside Down Labs](https://upsidedownlabs.tech/) that lets you read, process, and act on bio-potential signals like EEG, EMG, and EOG directly from an ESP32-based wearable. This repository contains the complete Arduino firmware library for the NPG Lite hardware.
+**Neuro PlayGround (NPG) Lite** is an open-source neuroscience development board by [Upside Down Labs](https://upsidedownlabs.tech/) that lets you read, process, and act on bio-potential signals like EEG, EMG, and EOG. This repository contains several standalone examples for the NPG Lite hardware.
 
 
 ## What This Repo Contains
@@ -13,12 +13,12 @@ Each folder is a self-contained Arduino sketch targeting a specific application.
 
 | Example | Code |
 | ------- | ---- |
-| Default program to show Visual, Audiotory, and Haptic feedback on NPG| [NPG-Default.ino](NPG-Default/NPG-Default.ino) |
+| Default program to show Visual, Auditory, and Haptic feedback on NPG| [NPG-Default.ino](NPG-Default/NPG-Default.ino) |
 | Calculate FFT & Band Power of single channel EEG and print on Serial | [Serial-FFT.ino](Serial-FFT/Serial-FFT.ino) |
-| Bluetooh Low Energy (BLE) server to notify client with real-time NPG data | [BLE-Server.ino](BLE-Server/BLE-Server.ino) |
+| Bluetooth Low Energy (BLE) server to notify client with real-time NPG data | [BLE-Server.ino](BLE-Server/BLE-Server.ino) |
 | BLE client to take notification from server and trigger GPIO | [BLE-Client.ino](BLE-Client/BLE-Client.ino) |
-| BLE server to nofity client based on EEG band (beta) power triggers | [BLE-BCI-Server-Toggle.ino](BLE-BCI-Server-Toggle/BLE-BCI-Server-Toggle.ino) |
-| InfraRed (IR) reciever code to identify LG AC remote button commands | [IR-LG-Receive.ino](IR-LG-Receive/IR-LG-Receive.ino) |
+| BLE server to notify client based on EEG band (beta) power triggers | [BLE-BCI-Server-Toggle.ino](BLE-BCI-Server-Toggle/BLE-BCI-Server-Toggle.ino) |
+| InfraRed (IR) receiver code to identify LG AC remote button commands | [IR-LG-Receive.ino](IR-LG-Receive/IR-LG-Receive.ino) |
 | IR signal send example code to control LG AC to toggle ON/OFF using user button | [IR-LG-Send.ino](IR-LG-Send/IR-LG-Send.ino) |
 | Brain Computer Interface (BCI) to toggle LG AC ON/OFF using EEG band (beta) power | [BCI-IR-Send.ino](BCI-IR-Send/BCI-IR-Send.ino) |
 | BLE client that receives notifications from the server and triggers GPIO to control the car | [BLE-BCI-Car.ino](BLE-BCI-Car/BLE-BCI-Car.ino) |
@@ -36,6 +36,8 @@ Each folder is a self-contained Arduino sketch targeting a specific application.
 
 All BLE-enabled or peripheral-using sketches follow a shared 6-LED NeoPixel convention so the board behaves predictably across firmware variants.
 
+<img src="assets/NPG-LITE-LED-labeled.png" width="700" alt="NPG Lite LED Layout"/>
+
 | LED | Standard Role | Colors |
 |-----|--------------|--------|
 | **LED 1** | BLE / Wi-Fi connection status | GREEN = connected · RED = disconnected · BLUE = actively streaming data |
@@ -44,7 +46,17 @@ All BLE-enabled or peripheral-using sketches follow a shared 6-LED NeoPixel conv
 | **LED 4** | General purpose | Sketch-specific |
 | **LED 5** | General purpose | Sketch-specific |
 | **LED 6** | Battery level | GREEN > 70 % · ORANGE 20–70 % · RED < 20 % |
- ---
+
+**Sketches that follow this convention:** `BLE-BCI-Car-Remote` · `BCI-BLE-Gamepad` · `Blinky-Keys-BLE` · `NPG-Mouse-BMI270` · `NPG-Mouse-MPU6050` · `Wheelchair-Sim`
+
+**Sketches that do not use this convention:**
+
+| Sketch | Reason |
+|--------|--------|
+| `Serial-FFT` · `BLE-Server` · `BLE-Client` · `BLE-BCI-Car` · `Blinky-Keys-Serial` · `Relay-Client` · `1CH-HCI-BCI-Serial` | Not needed |
+| `BCI-Blink-BLE` · `BCI-Blink-Serial` · `BCI-IR-Send` · `BCI-Relay-Server` · `BLE-BCI-Server-Toggle` · `Gyro-Motion-Detection` · `NPG-TELLO-Drone` | All LED occupied and |
+
+---
 ## For more information
 - [Upside Down Labs](https://upsidedownlabs.tech)
 - [NPG Lite Documentation](https://docs.upsidedownlabs.tech/hardware/bioamp/neuro-play-ground-lite/index.html)

@@ -339,7 +339,7 @@ void loop() {
           Serial.println(0);
           showPixels();   // Turn all LEDs white
           delay(100);
-          menuIndex=0;    // Deafult index 1
+          menuIndex=0;    // Default index 1
           pixels.setPixelColor(menuIndex, pixels.Color(0, 0, 20));  // Hovered LED Blue 
           pixels.show();
           blinkCount = 0;         // reset for next pair

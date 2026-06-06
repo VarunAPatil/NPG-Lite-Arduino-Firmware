@@ -856,7 +856,7 @@ void updateBLELed()
     unsigned long elapsed = millis() - lastCmdSentMs;
     if (elapsed < BLUE_LED_DURATION)
     {
-      color = pixel.Color(0, 0, 20);
+      color = pixel.Color(0, 0, 30);
     }
     else
     {
@@ -887,7 +887,7 @@ void setup()
   }
   else if (currentBattery <= 70)
   {
-    batteryColor = pixel.Color(30, 20, 0);
+    batteryColor = pixel.Color(35, 7, 0);
   }
   else
   {
@@ -1030,7 +1030,7 @@ void loop()
     }
     else if (currentBattery <= 70)
     {
-      batteryColor = pixel.Color(30, 20, 0);
+      batteryColor = pixel.Color(35, 7, 0);
     }
     else
     {
@@ -1043,7 +1043,7 @@ void loop()
   if (pixelDirty)
   {
     pixel.setPixelColor(BATTERY_LED, batteryColor);
-    lastPixel0Color = 0xFFFFFFFF;
+    pixel.show();
     pixelDirty = false;
   }
   updateBLELed();

@@ -117,7 +117,7 @@ bool connectToServer() {
   return true;
 }
 
-// Function to chech Characteristic
+// Function to check Characteristic
 bool connectCharacteristic(BLERemoteService* pRemoteService, BLERemoteCharacteristic* l_BLERemoteChar) {
   // Obtain a reference to the characteristic in the service of the remote BLE server.
   if (l_BLERemoteChar == nullptr) {

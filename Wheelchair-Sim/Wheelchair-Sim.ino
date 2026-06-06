@@ -416,7 +416,7 @@ void updateBLELed()
     if (elapsed < BLUE_LED_DURATION)
     {
       // hold full brightness during flash
-      color = pixel.Color(0, 0, 20);
+      color = pixel.Color(0, 0, 30);
     }
     else
     {
@@ -646,7 +646,7 @@ void loop()
     }
     else if (currentBattery <= 70)
     {
-      batteryColor = pixel.Color(30, 20, 0);
+      batteryColor = pixel.Color(35, 7, 0);
     }
     else
     {
@@ -656,11 +656,10 @@ void loop()
     lastBatteryCheck = currentMillis;
   }
 
-  // NOW flush dirty, battery color is already set
   if (pixelDirty)
   {
     pixel.setPixelColor(BATTERY_LED, batteryColor);
-    lastPixel0Color = 0xFFFFFFFF; // force BLE LED redraw
+    pixel.show();
     pixelDirty = false;
   }
   updateBLELed();
