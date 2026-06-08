@@ -36,7 +36,7 @@ Each folder is a self-contained Arduino sketch targeting a specific application.
 
 All BLE-enabled or peripheral-using sketches follow a shared 6-LED NeoPixel convention so the board behaves predictably across firmware variants.
 
-<img src="assets/NPG-LITE-LED-labeled.png" width="700" alt="NPG Lite LED Layout"/>
+<img src="assets/NPG-LITE-LED-labeled.jpeg" width=60% alt="NPG Lite LED Layout"/>
 
 | LED | Standard Role | Colors |
 |-----|--------------|--------|
@@ -60,5 +60,4 @@ All BLE-enabled or peripheral-using sketches follow a shared 6-LED NeoPixel conv
 ## For more information
 - [Upside Down Labs](https://upsidedownlabs.tech)
 - [NPG Lite Documentation](https://docs.upsidedownlabs.tech/hardware/bioamp/neuro-play-ground-lite/index.html)
-- [Contact Support](mailto:contact@upsidedownlabs.tech)
 ---
