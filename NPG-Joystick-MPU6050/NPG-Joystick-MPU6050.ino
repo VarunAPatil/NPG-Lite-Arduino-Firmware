@@ -230,12 +230,12 @@ void stopVibration() {
 }
 
 // Pick dominant axis from an accumulated gesture vector
-void resolveAxis(float sum[3], int &axisIndex, int &axisSign) {
+void resolveAxis(float diff[3], int &axisIndex, int &axisSign) {
   int a = 0;
-  if (fabs(sum[1]) > fabs(sum[a])) a = 1;
-  if (fabs(sum[2]) > fabs(sum[a])) a = 2;
+  if (fabs(diff[1]) > fabs(diff[a])) a = 1;
+  if (fabs(diff[2]) > fabs(diff[a])) a = 2;
   axisIndex = a;
-  axisSign = (sum[a] > 0) ? 1 : -1;
+  axisSign = (diff[a] > 0) ? 1 : -1;
 }
 
 void updateCalibrationStateMachine(unsigned long nowMs) {
