@@ -364,7 +364,7 @@ float interpolatePercentage(float voltage)
 
 int getCurrentBatteryPercentage()
 {
-  float avgRaw = (batteryWinCount > 0) ? (batteryWinSum / batteryWinCount) : analogRead(BATTERY_VOLTAGE_PIN);
+  float avgRaw = (batteryWinCount > 0) ? ((float)batteryWinSum / batteryWinCount) : analogRead(BATTERY_VOLTAGE_PIN);
   batteryWinSum = 0;
   batteryWinCount = 0;
   float voltage = (avgRaw / 1000.0) * 2;
@@ -420,7 +420,7 @@ void updateBLELed()
     }
     else
     {
-      // 2s passed with no new command — return to green
+      // BLUE_LED_DURATION (100ms) passed with no new command, return to green
       ledState = LED_GREEN;
       color = pixel.Color(0, 20, 0);
     }

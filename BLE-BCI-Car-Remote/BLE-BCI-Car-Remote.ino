@@ -151,7 +151,7 @@ BandpowerResults smoothedPowers = { 0, 0, 0, 0, 0, 0 };
 // ---------------------------------------------------------------
 static const unsigned long BATTERY_CHECK_INTERVAL = 10000;  // Interval in milliseconds
 static unsigned long lastBatteryCheck = 0;
-;
+
 uint32_t batteryColor = 0;  // stored battery LED color
 static uint32_t batteryWinSum = 0;
 static uint16_t batteryWinCount = 0;

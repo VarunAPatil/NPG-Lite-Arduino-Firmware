@@ -22,11 +22,6 @@
 #include <Adafruit_MPU6050.h>
 #include <Adafruit_Sensor.h>
 #include <Wire.h>
-#include <Adafruit_NeoPixel.h>
-
-#define PIXEL_PIN 15
-
-Adafruit_NeoPixel pixel(6, PIXEL_PIN, NEO_GRB + NEO_KHZ800);
 
 Adafruit_MPU6050 mpu;
 
@@ -75,10 +70,6 @@ void calibrateOffsets()
 
 void setup()
 {
-  pixel.begin();
-  pixel.clear();
-  pixel.show();
-
   Wire.begin();
   Wire.setClock(400000);
 

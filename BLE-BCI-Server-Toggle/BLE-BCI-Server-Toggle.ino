@@ -411,7 +411,7 @@ void loop() {
     processFFT();
     idx = 0;
   }
-    // The code below keeps the connection status uptodate:
+    // The code below keeps the connection status up to date:
     // Disconnecting
     if (!deviceConnected && oldDeviceConnected) {
         delay(500); // give the bluetooth stack the chance to get things ready

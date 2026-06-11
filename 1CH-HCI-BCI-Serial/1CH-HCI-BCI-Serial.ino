@@ -529,7 +529,7 @@ void loop()
   if (!jawBlockActive && BetaPower > BETA_THRESHOLD && (nowMs - lastFocusTime) >= FOCUS_DEBOUNCE_MS)
   {
     lastFocusTime = nowMs;
-    Serial.println("Focussed");
+    Serial.println("Focused");
     digitalWrite(LED_PIN, HIGH);
   }
 

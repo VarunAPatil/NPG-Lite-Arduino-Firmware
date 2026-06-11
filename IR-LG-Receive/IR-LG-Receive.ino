@@ -55,6 +55,8 @@ uint32_t reverseBits(uint32_t v, uint8_t bitCount)
 // ── Battery indicator (pixel 5) ──
 static const unsigned long BATTERY_CHECK_INTERVAL = 10000;
 static unsigned long lastBatteryCheck = -10000;
+static const unsigned long BATTERY_SAMPLE_INTERVAL = 100; // ms between ADC samples
+static unsigned long lastBatterySample = 0;
 static uint32_t batteryWinSum = 0;
 static uint16_t batteryWinCount = 0;
 static int lastBatteryPct = -1;
@@ -128,9 +130,13 @@ void setup()
 
 void loop()
 {
-  batteryWinSum += analogRead(BATTERY_VOLTAGE_PIN);
-  batteryWinCount++;
   unsigned long currentMillis = millis();
+  if (currentMillis - lastBatterySample >= BATTERY_SAMPLE_INTERVAL)
+  {
+    batteryWinSum += analogRead(BATTERY_VOLTAGE_PIN);
+    batteryWinCount++;
+    lastBatterySample = currentMillis;
+  }
   if (currentMillis - lastBatteryCheck >= BATTERY_CHECK_INTERVAL)
   {
     int pct = getCurrentBatteryPercentage();

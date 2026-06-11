@@ -347,6 +347,25 @@ void setup()
   pixel.clear();
   pixel.show();
 
+  // Initial battery color on pixel 5
+  int initBattery = getCurrentBatteryPercentage();
+  if (initBattery <= 20)
+  {
+    batteryColor = pixel.Color(20, 0, 0);
+  }
+  else if (initBattery <= 70)
+  {
+    batteryColor = pixel.Color(35, 7, 0);
+  }
+  else
+  {
+    batteryColor = pixel.Color(0, 20, 0);
+  }
+  pixel.setPixelColor(BATTERY_LED, batteryColor);
+  pixel.setPixelColor(BLE_LED, pixel.Color(20, 0, 0)); // red = disconnected
+  lastPixel0Color = pixel.Color(20, 0, 0);
+  pixel.show();
+
   Serial.begin(BAUD_RATE);
   delay(100);
 

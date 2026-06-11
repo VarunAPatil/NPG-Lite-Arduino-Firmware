@@ -122,6 +122,7 @@ float neutralPitchSum = 0, neutralRollSum = 0;
 // ─── EEG Signal processing config ───
 #define SAMPLE_RATE 512
 #define INPUT_PIN1 A0 // EEG input only (also used for jaw clench)
+#define BATTERY_VOLTAGE_PIN A6
 
 // EEG Envelope Configuration for blink detection
 #define ENVELOPE_WINDOW_MS 100
@@ -166,8 +167,6 @@ unsigned long lastCmdSentMs = 0;
 uint32_t lastPixel0Color = 0xFFFFFFFF;
 static bool pixelDirty = false;
 
-#define BATTERY_VOLTAGE_PIN A6
-#define BATTERY_LED 5
 static const unsigned long BATTERY_CHECK_INTERVAL = 10000;
 static unsigned long lastBatteryCheck = -10000;
 uint32_t batteryColor = 0;

@@ -686,6 +686,7 @@ void updateBLELed()
 // ─── setup() ───
 void setup()
 {
+  Serial.begin(115200);
   pixel.begin();
   pixel.clear();
   pixel.show();
