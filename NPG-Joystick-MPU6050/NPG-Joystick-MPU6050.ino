@@ -20,6 +20,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <BleCombo.h>
+#include <Adafruit_NeoPixel.h>
 
 // ── MPU6050 Includes ──
 #include <Adafruit_MPU6050.h>
@@ -61,9 +62,18 @@
 
 // ── VIBRATION MOTOR PIN ──
 #define VIBRATION_PIN 7  // Vibration motor for calibration feedback
+#define PIN_NEOPIXEL 15
+#define BATTERY_VOLTAGE_PIN A6
+#define BLUE_LED_DURATION 100
+
+Adafruit_NeoPixel pixel(6, PIN_NEOPIXEL, NEO_GRB + NEO_KHZ800);
+#define BLE_LED 0
+#define BATTERY_LED 5
+#define IMU_LED 3
 
 // ─── MPU6050 ───
 Adafruit_MPU6050 mpu;
+uint32_t mpuAddress = 0x68;
 
 float neutralPitch = 0;
 float neutralRoll = 0;
@@ -114,7 +124,7 @@ float mouseAccumX = 0, mouseAccumY = 0;
 
 // Double/Triple Blink Configuration
 const unsigned long BLINK_DEBOUNCE_MS = 250;
-const unsigned long DOUBLE_BLINK_MS = 600;
+const unsigned long DOUBLE_BLINK_MS = 400;
 unsigned long lastBlinkTime = 0;
 unsigned long firstBlinkTime = 0;
 unsigned long secondBlinkTime = 0;
@@ -126,7 +136,37 @@ float envelopeBuffer[ENVELOPE_WINDOW_SIZE] = { 0 };
 int envelopeIndex = 0;
 float envelopeSum = 0;
 float currentEEGEnvelope = 0;
-float BlinkThreshold = 50.0;
+float BlinkThreshold = 180.0;
+
+// ── BLE LED state machine ──
+enum LedState {
+  LED_RED,
+  LED_GREEN,
+  LED_BLUE_FADE
+};
+LedState ledState = LED_RED;
+unsigned long lastCmdSentMs = 0;
+uint32_t lastPixel0Color = 0xFFFFFFFF;
+static bool pixelDirty = false;
+
+// ── Battery level ──
+static const unsigned long BATTERY_CHECK_INTERVAL = 10000;
+static unsigned long lastBatteryCheck = -10000;
+uint32_t batteryColor = 0;
+static uint32_t batteryWinSum = 0;
+static uint16_t batteryWinCount = 0;
+static int lastBatteryPct = -1;
+static uint8_t risingCount = 0;
+static const uint8_t RISING_THRESHOLD = 3;
+const float voltageLUT[] = {
+  3.27, 3.61, 3.69, 3.71, 3.73, 3.75, 3.77, 3.79, 3.80, 3.82,
+  3.84, 3.85, 3.87, 3.91, 3.95, 3.98, 4.02, 4.08, 4.11, 4.15, 4.20
+};
+const int percentLUT[] = {
+  0, 5, 10, 15, 20, 25, 30, 35, 40, 45,
+  50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100
+};
+const int lutSize = sizeof(voltageLUT) / sizeof(voltageLUT[0]);
 
 // ─── FILTERS ───
 // Band-Stop Butterworth IIR digital filter (50Hz notch)
@@ -400,11 +440,14 @@ void updatePrecisionMouse(unsigned long nowMs) {
 
   if (finalMouseX != 0 || finalMouseY != 0) {
     Mouse.move(finalMouseX, finalMouseY);
+    lastCmdSentMs = millis();
+    ledState = LED_BLUE_FADE;
   }
 }
 
 // ========== BLINK DETECTION (double blink = left click, triple blink = right click) ==========
 void handleBlinks(unsigned long nowMs) {
+  if (!isMPUCalibrated || !axisCalibrated) return;
   bool envelopeHigh = currentEEGEnvelope > BlinkThreshold;
   if (!blinkActive && envelopeHigh && (nowMs - lastBlinkTime) >= BLINK_DEBOUNCE_MS) {
     lastBlinkTime = nowMs;
@@ -416,6 +459,10 @@ void handleBlinks(unsigned long nowMs) {
       blinkCount = 2;
     } else if (blinkCount == 2 && (nowMs - secondBlinkTime) <= triple_blink_ms) {
       Mouse.click(MOUSE_RIGHT);
+      if (Keyboard.isConnected()) {
+        lastCmdSentMs = millis();
+        ledState = LED_BLUE_FADE;
+      }
       blinkCount = 0;
     } else {
       firstBlinkTime = nowMs;
@@ -431,6 +478,10 @@ void handleBlinks(unsigned long nowMs) {
   // Double blink timeout -> Left mouse click
   if (blinkCount == 2 && (nowMs - secondBlinkTime) > triple_blink_ms) {
     Mouse.click(MOUSE_LEFT);
+    if (Keyboard.isConnected()) {
+      lastCmdSentMs = millis();
+      ledState = LED_BLUE_FADE;
+    }
     blinkCount = 0;
   }
   // Single blink timeout
@@ -439,15 +490,117 @@ void handleBlinks(unsigned long nowMs) {
   }
 }
 
+float interpolatePercentage(float voltage) {
+  if (voltage <= voltageLUT[0])
+    return 0;
+  if (voltage >= voltageLUT[lutSize - 1])
+    return 100;
+  int i = 0;
+  while (i < lutSize - 1 && voltage > voltageLUT[i + 1])
+    i++;
+  float v1 = voltageLUT[i], v2 = voltageLUT[i + 1];
+  int p1 = percentLUT[i], p2 = percentLUT[i + 1];
+  return p1 + (voltage - v1) * (p2 - p1) / (v2 - v1);
+}
+
+int getCurrentBatteryPercentage() {
+  float avgRaw = (batteryWinCount > 0) ? (batteryWinSum / batteryWinCount) : analogRead(BATTERY_VOLTAGE_PIN);
+  batteryWinSum = 0;
+  batteryWinCount = 0;
+  float voltage = (avgRaw / 1000.0) * 2;
+  voltage += 0.022;
+  float percentage = interpolatePercentage(voltage);
+  if (lastBatteryPct == -1) {
+    lastBatteryPct = (int)percentage;
+  } else if ((int)percentage < lastBatteryPct) {
+    lastBatteryPct = (int)percentage;
+    risingCount = 0;
+  } else if ((int)percentage > lastBatteryPct) {
+    risingCount++;
+    if (risingCount >= RISING_THRESHOLD) {
+      lastBatteryPct = (int)percentage;
+      risingCount = 0;
+    }
+  } else {
+    risingCount = 0;
+  }
+  return lastBatteryPct;
+}
+
+// Update IMU I2C led
+void updateIMULed(bool connectionStatus) {
+  uint32_t color;
+
+  if (!connectionStatus) {
+    color = pixel.Color(20, 0, 0);  // Red = IMU communication failed
+  } else {
+    color = pixel.Color(0, 20, 0);  // Green = ready
+  }
+  pixel.setPixelColor(IMU_LED, color);
+  pixel.show();
+}
+
+void updateBLELed() {
+  uint32_t color;
+  if (ledState == LED_RED) {
+    color = pixel.Color(20, 0, 0);
+  } else if (ledState == LED_GREEN) {
+    color = pixel.Color(0, 20, 0);
+  } else {
+    unsigned long elapsed = millis() - lastCmdSentMs;
+    if (elapsed < BLUE_LED_DURATION) {
+      color = pixel.Color(0, 0, 30);
+    } else {
+      ledState = LED_GREEN;
+      color = pixel.Color(0, 20, 0);
+    }
+  }
+  if (color != lastPixel0Color) {
+    lastPixel0Color = color;
+    pixel.setPixelColor(BLE_LED, color);
+    pixel.show();
+  }
+}
+
 // ─── setup() ───
 void setup() {
   Serial.begin(115200);
   delay(2000);
 
+  pixel.begin();
+  pixel.clear();
+  pixel.show();
+
   Wire.begin(22, 23);
+
+  int currentBattery = getCurrentBatteryPercentage();
+  if (currentBattery <= 20) {
+    batteryColor = pixel.Color(20, 0, 0);
+  } else if (currentBattery <= 70) {
+    batteryColor = pixel.Color(35, 7, 0);
+  } else {
+    batteryColor = pixel.Color(0, 20, 0);
+  }
+  pixel.setPixelColor(BATTERY_LED, batteryColor);
+
   while (!mpu.begin()) {
     Serial.println("MPU6050 initialization FAILED!");
-    delay(500);
+    static uint16_t fader = 100;
+    static bool decreasing = true;
+    pixel.setPixelColor(IMU_LED, pixel.Color(fader, 0, 0));
+    pixel.show();
+    delay(20);
+    if (decreasing) {
+      fader = fader - 2;
+      if (fader < 10) {
+        decreasing = false;
+      }
+    } else {
+      fader = fader + 2;
+      if (fader > 100) {
+        decreasing = true;
+      }
+    }
   }
 
   mpu.setAccelerometerRange(MPU6050_RANGE_2_G);
@@ -475,6 +628,76 @@ void setup() {
 // ─── loop() ───
 void loop() {
   bool connected = Keyboard.isConnected();
+  static bool lastConnected = false;
+  if (connected != lastConnected) {
+    lastConnected = connected;
+    ledState = connected ? LED_GREEN : LED_RED;
+    pixelDirty = true;
+  }
+
+  Wire.beginTransmission(mpuAddress);
+
+  bool imuConnected;
+  if (!Wire.endTransmission()) {
+    imuConnected = true;
+  } else {
+    imuConnected = false;
+  }
+  static bool lastConnection = false;
+  if (imuConnected != lastConnection) {
+    lastConnection = imuConnected;
+    updateIMULed(imuConnected);
+    pixelDirty = true;
+    if (!imuConnected) {
+      // ── IMU just DISCONNECTED ──
+      // Invalidate calibration so mouse stops moving
+      isMPUCalibrated = false;
+      axisCalibrated = false;
+      calState = CAL_IDLE;
+
+      mouseVelocityX = 0;
+      mouseVelocityY = 0;
+
+      eegNotchFilter.reset();
+      eogFilter.reset();
+      eegFilter.reset();
+      Serial.println("MPU disconnected - calibration invalidated");
+    } else {
+      // ── IMU just RECONNECTED ──
+      // Re-init the IMU hardware
+      if (mpu.begin()) {
+        mpu.setAccelerometerRange(MPU6050_RANGE_2_G);
+        mpu.setGyroRange(MPU6050_RANGE_250_DEG);
+        mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
+        Serial.println("MPU reconnected - restarting calibration");
+        calState = CAL_INIT_WAIT;
+        calStateStartTime = millis();
+      } else {
+        Serial.println("MPU reconnected but begin() failed");
+      }
+    }
+  }
+
+  unsigned long currentMillis = millis();
+  if (currentMillis - lastBatteryCheck >= BATTERY_CHECK_INTERVAL) {
+    int currentBattery = getCurrentBatteryPercentage();
+    if (currentBattery <= 20) {
+      batteryColor = pixel.Color(20, 0, 0);
+    } else if (currentBattery <= 70) {
+      batteryColor = pixel.Color(35, 7, 0);
+    } else {
+      batteryColor = pixel.Color(0, 20, 0);
+    }
+    pixelDirty = true;
+    lastBatteryCheck = currentMillis;
+  }
+
+  if (pixelDirty) {
+    pixel.setPixelColor(BATTERY_LED, batteryColor);
+    pixel.show();
+    pixelDirty = false;
+  }
+  updateBLELed();
 
   static unsigned long lastMicros = micros();
 
@@ -483,7 +706,7 @@ void loop() {
   static long timer = 0;
   timer -= dt;
 
-  if (timer <= 0) {
+  if (timer <= 0 && connected && imuConnected) {
     timer += 1000000L / SAMPLE_RATE;
     unsigned long nowMs = millis();
 
@@ -496,6 +719,8 @@ void loop() {
     updateCalibrationStateMachine(nowMs);
 
     int raw1 = analogRead(INPUT_PIN1);
+    batteryWinSum += analogRead(BATTERY_VOLTAGE_PIN);
+    batteryWinCount++;
     float filteeg = eegFilter.process(eegNotchFilter.process(raw1));
     float filteog = eogFilter.process(filteeg);
     currentEEGEnvelope = updateEnvelope(filteog);

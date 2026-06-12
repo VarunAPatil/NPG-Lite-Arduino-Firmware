@@ -20,9 +20,19 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <BleCombo.h>
+#include <Adafruit_NeoPixel.h>
 
 // ── BMI270 Includes ──
 #include <SparkFun_BMI270_Arduino_Library.h>
+
+#define PIXEL_PIN 15
+#define PIXEL_COUNT 6
+Adafruit_NeoPixel pixel(PIXEL_COUNT, PIXEL_PIN, NEO_GRB + NEO_KHZ800);
+#define BLE_LED 0
+#define BATTERY_LED 5
+#define IMU_LED 3
+#define BLUE_LED_DURATION 100
+uint32_t imuAddress = 0x68;
 
 // ══════════════════════════════════════════════════════════════════════════════
 // ─── CONTROL MAPPING CONFIGURATION ───
@@ -117,7 +127,7 @@ unsigned long calStateStartTime = 0;
 
 // Double/Triple Blink Configuration
 const unsigned long BLINK_DEBOUNCE_MS = 250;
-const unsigned long DOUBLE_BLINK_MS = 600;
+const unsigned long DOUBLE_BLINK_MS = 300;
 unsigned long lastBlinkTime = 0;
 unsigned long firstBlinkTime = 0;
 unsigned long secondBlinkTime = 0;
@@ -134,13 +144,44 @@ float envelopeBuffer[ENVELOPE_WINDOW_SIZE] = { 0 };
 int envelopeIndex = 0;
 float envelopeSum = 0;
 float currentEEGEnvelope = 0;
-float BlinkThreshold = 50.0;
+float BlinkThreshold = 200.0;
 
 // Jaw envelope buffer
 float jawEnvelopeBuffer[ENVELOPE_WINDOW_SIZE] = { 0 };
 int jawEnvelopeIndex = 0;
 float jawEnvelopeSum = 0;
 float currentJawEnvelope = 0;
+
+// ── BLE LED state machine ──
+enum LedState {
+  LED_RED,
+  LED_GREEN,
+  LED_BLUE_FADE
+};
+LedState ledState = LED_RED;
+unsigned long lastCmdSentMs = 0;
+uint32_t lastPixel0Color = 0xFFFFFFFF;
+static bool pixelDirty = false;
+
+
+#define BATTERY_VOLTAGE_PIN A6
+static const unsigned long BATTERY_CHECK_INTERVAL = 10000;
+static unsigned long lastBatteryCheck = -10000;
+uint32_t batteryColor = 0;
+static uint32_t batteryWinSum = 0;
+static uint16_t batteryWinCount = 0;
+static int lastBatteryPct = -1;
+static uint8_t risingCount = 0;
+static const uint8_t RISING_THRESHOLD = 3;
+const float voltageLUT[] = {
+  3.27, 3.61, 3.69, 3.71, 3.73, 3.75, 3.77, 3.79, 3.80, 3.82,
+  3.84, 3.85, 3.87, 3.91, 3.95, 3.98, 4.02, 4.08, 4.11, 4.15, 4.20
+};
+const int percentLUT[] = {
+  0, 5, 10, 15, 20, 25, 30, 35, 40, 45,
+  50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100
+};
+const int lutSize = sizeof(voltageLUT) / sizeof(voltageLUT[0]);
 
 // ─── DEBUG FUNCTION ───
 void debugPrint(const char *message) {
@@ -484,6 +525,8 @@ void updatePrecisionMouse(unsigned long nowMs) {
 
   if (finalMouseX != 0 || finalMouseY != 0) {
     Mouse.move(finalMouseX, finalMouseY);
+    lastCmdSentMs = millis();
+    ledState = LED_BLUE_FADE;
   }
 }
 
@@ -499,6 +542,9 @@ void handleJawClench(unsigned long nowMs) {
   } else {
     if (!jawClenchTriggered) {
       Mouse.click(MOUSE_LEFT);
+      lastCmdSentMs = millis();
+      ledState = LED_BLUE_FADE;
+
       jawClenchTriggered = true;
       debugPrint("Jaw clench - Left click!");
       startVibration();
@@ -527,6 +573,9 @@ void handleBlinks(unsigned long nowMs) {
       debugPrint("Second blink detected");
     } else if (blinkCount == 2 && (nowMs - secondBlinkTime) <= triple_blink_ms) {
       Mouse.click(MOUSE_RIGHT);
+      lastCmdSentMs = millis();
+      ledState = LED_BLUE_FADE;
+
       blinkCount = 0;
       debugPrint("Triple blink - Right click!");
     } else {
@@ -550,15 +599,114 @@ void handleBlinks(unsigned long nowMs) {
   }
 }
 
+float interpolatePercentage(float voltage) {
+  if (voltage <= voltageLUT[0])
+    return 0;
+  if (voltage >= voltageLUT[lutSize - 1])
+    return 100;
+  int i = 0;
+  while (i < lutSize - 1 && voltage > voltageLUT[i + 1])
+    i++;
+  float v1 = voltageLUT[i], v2 = voltageLUT[i + 1];
+  int p1 = percentLUT[i], p2 = percentLUT[i + 1];
+  return p1 + (voltage - v1) * (p2 - p1) / (v2 - v1);
+}
+
+int getCurrentBatteryPercentage() {
+  float avgRaw = (batteryWinCount > 0) ? (batteryWinSum / batteryWinCount) : analogRead(BATTERY_VOLTAGE_PIN);
+  batteryWinSum = 0;
+  batteryWinCount = 0;
+  float voltage = (avgRaw / 1000.0) * 2;
+  voltage += 0.022;
+  float percentage = interpolatePercentage(voltage);
+  if (lastBatteryPct == -1) {
+    lastBatteryPct = (int)percentage;
+  } else if ((int)percentage < lastBatteryPct) {
+    lastBatteryPct = (int)percentage;
+    risingCount = 0;
+  } else if ((int)percentage > lastBatteryPct) {
+    risingCount++;
+    if (risingCount >= RISING_THRESHOLD) {
+      lastBatteryPct = (int)percentage;
+      risingCount = 0;
+    }
+  } else {
+    risingCount = 0;
+  }
+  return lastBatteryPct;
+}
+
+void updateIMULed(bool connectionStatus) {
+  uint32_t color;
+
+  if (!connectionStatus) {
+    color = pixel.Color(20, 0, 0);  // Red = IMU communication failed
+  } else {
+    color = pixel.Color(0, 20, 0);  // Green = ready
+  }
+
+  pixel.setPixelColor(IMU_LED, color);
+}
+
+void updateBLELed() {
+  uint32_t color;
+  if (ledState == LED_RED) {
+    color = pixel.Color(20, 0, 0);
+  } else if (ledState == LED_GREEN) {
+    color = pixel.Color(0, 20, 0);
+  } else {
+    unsigned long elapsed = millis() - lastCmdSentMs;
+    if (elapsed < BLUE_LED_DURATION) {
+      color = pixel.Color(0, 0, 20);
+    } else {
+      ledState = LED_GREEN;
+      color = pixel.Color(0, 20, 0);
+    }
+  }
+  if (color != lastPixel0Color) {
+    lastPixel0Color = color;
+    pixel.setPixelColor(BLE_LED, color);
+    pixel.show();
+  }
+}
+
 // ─── setup() ───
 void setup() {
   Serial.begin(115200);
   delay(2000);
 
+  pixel.begin();
+  pixel.clear();
+  int currentBattery = getCurrentBatteryPercentage();
+  if (currentBattery <= 20) {
+    batteryColor = pixel.Color(20, 0, 0);
+  } else if (currentBattery <= 70) {
+    batteryColor = pixel.Color(30, 20, 0);
+  } else {
+    batteryColor = pixel.Color(0, 20, 0);
+  }
+  pixel.setPixelColor(BATTERY_LED, batteryColor);
+
   Wire.begin(22, 23);
   while (imu.beginI2C() != BMI2_OK) {
     debugPrint("BMI270 initialization FAILED!");
-    delay(500);
+
+    static uint16_t fader = 100;
+    static bool decreasing = true;
+    pixel.setPixelColor(IMU_LED, pixel.Color(fader, 0, 0));
+    pixel.show();
+    delay(20);
+    if (decreasing) {
+      fader = fader - 2;
+      if (fader < 10) {
+        decreasing = false;
+      }
+    } else {
+      fader = fader + 2;
+      if (fader > 100) {
+        decreasing = true;
+      }
+    }
   }
 
   debugPrint("System Starting...");
@@ -572,6 +720,8 @@ void setup() {
   debugPrint("BLE Combo initialized");
 
   debugPrint("BMI270 initialized successfully!");
+
+  updateIMULed(true);
 
   for (int i = 0; i < 2; i++) {
     startVibration();
@@ -587,6 +737,78 @@ void setup() {
 
 // ─── loop() ───
 void loop() {
+  bool connected = Keyboard.isConnected();
+  static bool lastConnected = false;
+  if (connected != lastConnected) {
+    lastConnected = connected;
+    ledState = connected ? LED_GREEN : LED_RED;
+    pixelDirty = true;
+  }
+  bool imuConnect;
+  Wire.beginTransmission(imuAddress);
+  if (!Wire.endTransmission()) {
+    imuConnect = true;
+  } else {
+    imuConnect = false;
+  }
+  static bool lastIMUconnectStatus = false;
+  if (imuConnect != lastIMUconnectStatus) {
+    lastIMUconnectStatus = imuConnect;
+    updateIMULed(imuConnect);
+    pixelDirty = true;
+
+    if (!imuConnect) {
+      // ── IMU just DISCONNECTED ──
+      // Invalidate calibration so mouse stops moving
+      isIMUCalibrated = false;
+      axisCalibrated = false;
+      calState = CAL_INIT_WAIT;
+      calStateStartTime = millis();
+
+      mouseVelX = 0;
+      mouseVelY = 0;
+      mouseAccumX = 0;
+      mouseAccumY = 0;
+
+      eegNotchFilter.reset();
+      eogFilter.reset();
+      jawHighPassFilter.reset();
+      eegFilter.reset();
+      debugPrint("IMU disconnected - calibration invalidated");
+    } else {
+      // ── IMU just RECONNECTED ──
+      // Re-init the IMU hardware
+      if (imu.beginI2C() == BMI2_OK) {
+        debugPrint("IMU reconnected - restarting calibration");
+        calState = CAL_INIT_WAIT;
+        calStateStartTime = millis();
+      } else {
+        debugPrint("IMU reconnected but beginI2C() failed");
+      }
+    }
+  }
+
+  unsigned long currentMillis = millis();
+  if (currentMillis - lastBatteryCheck >= BATTERY_CHECK_INTERVAL) {
+    int currentBattery = getCurrentBatteryPercentage();
+    if (currentBattery <= 20) {
+      batteryColor = pixel.Color(20, 0, 0);
+    } else if (currentBattery <= 70) {
+      batteryColor = pixel.Color(30, 20, 0);
+    } else {
+      batteryColor = pixel.Color(0, 20, 0);
+    }
+    pixelDirty = true;
+    lastBatteryCheck = currentMillis;
+  }
+
+  if (pixelDirty) {
+    pixel.setPixelColor(BATTERY_LED, batteryColor);
+    pixel.show();
+    pixelDirty = false;
+  }
+  updateBLELed();
+
   static unsigned long lastMicros = micros();
   unsigned long nowMs = millis();
 
@@ -595,7 +817,7 @@ void loop() {
   static long timer = 0;
   timer -= dt;
 
-  if (timer <= 0 && imu.getSensorData() == BMI2_OK) {
+  if (timer <= 0 && connected && imu.getSensorData() == BMI2_OK) {
     timer += 1000000L / SAMPLE_RATE;
     readingsAcc[0] = imu.data.accelX;
     readingsAcc[1] = imu.data.accelY;
@@ -605,6 +827,8 @@ void loop() {
 
     // 1) EEG ADC read - only one channel
     int raw1 = analogRead(INPUT_PIN1);
+    batteryWinSum += analogRead(BATTERY_VOLTAGE_PIN);
+    batteryWinCount++;
 
     // 2) Apply notch filter (50Hz removal)
     float notchFiltered = eegNotchFilter.process(raw1);
@@ -638,7 +862,9 @@ void loop() {
   }
 
   // 4) PRECISION MOUSE CONTROL (ACCELEROMETER BASED) - runs continuously
-  updatePrecisionMouse(millis());
+  if (connected) {
+    updatePrecisionMouse(millis());
+  }
 
 // Print status every 5 seconds
 #if DEBUG_ENABLE

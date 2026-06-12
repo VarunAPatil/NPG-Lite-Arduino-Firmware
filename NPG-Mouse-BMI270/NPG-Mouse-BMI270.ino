@@ -52,7 +52,7 @@ uint32_t imuAddress = 0x68;
 #define MAX_SENSITIVITY 10.0  // Fastest speed: LOWER = more controlled (4.0-15.0)
 
 //  PRECISION SETTINGS (FOR MINUTE MOVEMENTS)
-#define PRECISION_ZONE 4.0        // Precision angle range: HIGHER = more precision zone (1.0-4.0)
+#define PRECISION_ZONE 3.0        // Precision angle range: HIGHER = more precision zone (1.0-4.0)
 #define PRECISION_MULTIPLIER 0.1  // Precision sensitivity: LOWER = more precise (0.2-0.6)
 
 //  SMOOTHING SETTINGS (FOR RESPONSIVENESS)
@@ -68,7 +68,6 @@ uint32_t imuAddress = 0x68;
 #define MAX_RATE 60.0          // deg/s mapped to MAX_SENSITIVITY
 #define GYRO_DEADZONE 5.0      // deg/s below this = no movement
 #define GYRO_BIAS_SAMPLES 200  // samples averaged for bias at rest
-#define GESTURE_MIN_RATE 15.0  // deg/s a gesture must exceed to be valid
 
 // ===== JAW CLENCH CONFIGURATION =====
 #define JAW_THRESHOLD 40.0      // Jaw clench detection threshold
@@ -111,24 +110,20 @@ float biasSum[3] = { 0, 0, 0 };
 
 // ── CACHED GYRO DATA (read ONCE per loop tick, reused everywhere) ──
 float readingsGyro[3] = { 0, 0, 0 };
-bool readingsGyroValid = false;
 
 // ── VELOCITY SMOOTHING ──
 float smoothRateX = 0, smoothRateY = 0;
-float mouseVelX = 0, mouseVelY = 0;     
-float mouseAccumX = 0, mouseAccumY = 0; 
+float mouseVelX = 0, mouseVelY = 0;
+float mouseAccumX = 0, mouseAccumY = 0;
 
 // ── NON-BLOCKING CALIBRATION STATE MACHINE ──
-enum CalibrationState
-{
+enum CalibrationState {
   CAL_IDLE,
   CAL_INIT_WAIT,
   CAL_UP_VIBRATE,
   CAL_UP_WAIT,
-  CAL_CENTER_WAIT1,
   CAL_LEFT_VIBRATE,
   CAL_LEFT_WAIT,
-  CAL_CENTER_WAIT2,
   CAL_NEUTRAL_SAMPLE,
   CAL_COMPLETE
 };
@@ -146,11 +141,11 @@ unsigned long calStateStartTime = 0;
 
 // Double/Triple Blink Configuration
 const unsigned long BLINK_DEBOUNCE_MS = 250;
-const unsigned long DOUBLE_BLINK_MS = 600;
+const unsigned long DOUBLE_BLINK_MS = 400;
 unsigned long lastBlinkTime = 0;
 unsigned long firstBlinkTime = 0;
 unsigned long secondBlinkTime = 0;
-unsigned long triple_blink_ms = 800;
+unsigned long triple_blink_ms = 1000;
 int blinkCount = 0;
 bool blinkActive = false;
 
@@ -164,7 +159,7 @@ float envelopeBuffer[ENVELOPE_WINDOW_SIZE] = { 0 };
 int envelopeIndex = 0;
 float envelopeSum = 0;
 float currentEEGEnvelope = 0;
-float BlinkThreshold = 50.0;
+float BlinkThreshold = 200.0;
 
 // Jaw envelope buffer (separate for jaw detection)
 float jawEnvelopeBuffer[ENVELOPE_WINDOW_SIZE] = { 0 };
@@ -210,12 +205,6 @@ void debugPrint(const char *message) {
 #endif
 }
 
-void debugPrint(String message) {
-#if DEBUG_ENABLE
-  Serial.println(message);
-#endif
-}
-
 void debugPrintValue(const char *label, float value) {
 #if DEBUG_ENABLE
   Serial.print(label);
@@ -226,8 +215,7 @@ void debugPrintValue(const char *label, float value) {
 
 // ─── FILTERS ───
 // Band-Stop Butterworth IIR digital filter (50Hz notch)
-class NotchFilter
-{
+class NotchFilter {
 private:
   struct BiquadState {
     float z1 = 0, z2 = 0;
@@ -236,8 +224,7 @@ private:
   BiquadState state1;
 
 public:
-  float process(float input)
-  {
+  float process(float input) {
     float output = input;
 
     float x0 = output - (-1.58696045f * state0.z1) - (0.96505858f * state0.z2);
@@ -253,16 +240,14 @@ public:
     return output;
   }
 
-  void reset()
-  {
+  void reset() {
     state0.z1 = state0.z2 = 0;
     state1.z1 = state1.z2 = 0;
   }
 } eegNotchFilter;
 
 // High-Pass Butterworth IIR digital filter (for EOG/blinks)
-class EOGFilter
-{
+class EOGFilter {
 private:
   struct BiquadState {
     float z1 = 0, z2 = 0;
@@ -270,8 +255,7 @@ private:
   BiquadState state0;
 
 public:
-  float process(float input)
-  {
+  float process(float input) {
     float output = input;
 
     float x0 = output - (-1.91327599f * state0.z1) - (0.91688335f * state0.z2);
@@ -282,15 +266,13 @@ public:
     return output;
   }
 
-  void reset()
-  {
+  void reset() {
     state0.z1 = state0.z2 = 0;
   }
 } eogFilter;
 
 // High-Pass Butterworth IIR for jaw clench (70Hz)
-class JawHighPassFilter
-{
+class JawHighPassFilter {
 private:
   struct BiquadState {
     float z1 = 0, z2 = 0;
@@ -298,8 +280,7 @@ private:
   BiquadState state0;
 
 public:
-  float process(float input)
-  {
+  float process(float input) {
     float output = input;
 
     float x0 = output - (-0.82523238f * state0.z1) - (0.29463653f * state0.z2);
@@ -310,15 +291,13 @@ public:
     return output;
   }
 
-  void reset()
-  {
+  void reset() {
     state0.z1 = state0.z2 = 0;
   }
 } jawHighPassFilter;
 
 // Low-Pass Butterworth IIR digital filter
-class EEGFilter
-{
+class EEGFilter {
 private:
   struct BiquadState {
     float z1 = 0, z2 = 0;
@@ -343,8 +322,7 @@ public:
 } eegFilter;
 
 // Update EEG envelope for blinks
-float updateEEGEnvelope(float sample)
-{
+float updateEEGEnvelope(float sample) {
   float absSample = fabsf(sample);
   envelopeSum -= envelopeBuffer[envelopeIndex];
   envelopeSum += absSample;
@@ -354,8 +332,7 @@ float updateEEGEnvelope(float sample)
 }
 
 // Update jaw envelope for clench detection
-float updateJawEnvelope(float sample)
-{
+float updateJawEnvelope(float sample) {
   float absSample = fabsf(sample);
   jawEnvelopeSum -= jawEnvelopeBuffer[jawEnvelopeIndex];
   jawEnvelopeSum += absSample;
@@ -365,28 +342,14 @@ float updateJawEnvelope(float sample)
 }
 
 // ─── VIBRATION FEEDBACK FUNCTIONS ───
-void startVibration()
-{
+void startVibration() {
   digitalWrite(VIBRATION_PIN, HIGH);
   debugPrint("Vibration ON");
 }
 
-void stopVibration()
-{
+void stopVibration() {
   digitalWrite(VIBRATION_PIN, LOW);
   debugPrint("Vibration OFF");
-}
-
-// Returns bias-corrected angular rates in deg/s
-void getGyroRates(float &gx, float &gy, float &gz) {
-  if (imu.getSensorData() != BMI2_OK) {
-    debugPrint("Failed to read gyro data");
-    gx = gy = gz = 0;
-    return;
-  }
-  gx = imu.data.gyroX - gyroBias[0];
-  gy = imu.data.gyroY - gyroBias[1];
-  gz = imu.data.gyroZ - gyroBias[2];
 }
 
 // Pick dominant axis from an accumulated gesture vector
@@ -454,7 +417,6 @@ void updateCalibrationStateMachine(unsigned long nowMs) {
         unsigned long n = micros();
         float dt = (n - lastGyroMicros) / 1000000.0f;
         lastGyroMicros = n;
-        // getGyroRates(gx, gy, gz);
         gx = readingsGyro[0];
         gy = readingsGyro[1];
         gz = readingsGyro[2];
@@ -471,7 +433,7 @@ void updateCalibrationStateMachine(unsigned long nowMs) {
             debugPrint("Both axes coincide - Calibration FAILED, retrying");
             gestureSum[0] = gestureSum[1] = gestureSum[2] = 0;
             lastGyroMicros = micros();
-            calState = CAL_LEFT_WAIT;
+            calState = CAL_LEFT_VIBRATE;
             calStateStartTime = nowMs;
             startVibration();
             break;
@@ -528,7 +490,7 @@ void updateCalibrationStateMachine(unsigned long nowMs) {
   }
 }
 
-// To map 
+// To map
 float mapRateToMouse(float rate) {
   if (rate == 0) return 0;
 
@@ -537,8 +499,7 @@ float mapRateToMouse(float rate) {
   float norm = constrain(absRate / MAX_RATE, 0.0f, 1.0f);
 
   float sensitivity;
-  if (absRate <= PRECISION_ZONE) 
-  {
+  if (absRate <= PRECISION_ZONE) {
     sensitivity = MIN_SENSITIVITY * PRECISION_MULTIPLIER * (absRate / PRECISION_ZONE);
   } else {
     float accel = pow(norm, ACCEL_CURVE);
@@ -577,7 +538,7 @@ void updatePrecisionMouse(unsigned long nowMs) {
 
   float targetVelX = mapRateToMouse(smoothRateX);
   float targetVelY = mapRateToMouse(smoothRateY);
-  
+
   mouseVelX = mouseVelX * 0.8f + targetVelX * 0.2f;
   mouseVelY = mouseVelY * 0.8f + targetVelY * 0.2f;
 
@@ -590,39 +551,28 @@ void updatePrecisionMouse(unsigned long nowMs) {
     if (fabs(mouseVelY) < STOP_THRESHOLD) mouseVelY = 0;
   }
 
-int finalMouseX = (int)mouseVelX;
-int finalMouseY = (int)mouseVelY;
   mouseAccumX += mouseVelX;
   mouseAccumY += mouseVelY;
-  mouseAccumX -= finalMouseX;           // carry fraction to next frame
+  int finalMouseX = (int)mouseAccumX;
+  int finalMouseY = (int)mouseAccumY;
+  mouseAccumX -= finalMouseX;  // carry fraction to next frame
   mouseAccumY -= finalMouseY;
 
-// #if DEBUG_ENABLE
-//   static int debugCounter = 0;
-//   if (debugCounter++ % 50 == 0) {
-//     Serial.print("Rate - X: ");
-//     Serial.print(smoothRateX);
-//     Serial.print(", Y: ");
-//     Serial.print(smoothRateY);
-//     Serial.print(" | Mouse - X: ");
-//     Serial.print(finalMouseX);
-//     Serial.print(", Y: ");
-//     Serial.println(finalMouseY);
-//   }
-// #endif
-
-
-Mouse.move(finalMouseX, finalMouseY);
-Serial.print(finalMouseX);
-Serial.print(" , ");
-Serial.println(finalMouseY);
-lastCmdSentMs = millis();
-ledState = LED_BLUE_FADE;
-  
+  if (finalMouseX != 0 || finalMouseY != 0) {
+    Mouse.move(finalMouseX, finalMouseY);
+#if DEBUG_ENABLE
+    Serial.print(finalMouseX);
+    Serial.print(" , ");
+    Serial.println(finalMouseY);
+#endif
+    lastCmdSentMs = millis();
+    ledState = LED_BLUE_FADE;
+  }
 }
 
 // ========== JAW CLENCH DETECTION ==========
 void handleJawClench(unsigned long nowMs) {
+  if (!isIMUCalibrated || !axisCalibrated) return;
   if (!jawState) {
     // Not currently clenching - check for threshold crossing
     if (currentJawEnvelope > JAW_THRESHOLD && (nowMs - lastJawClenchTime) >= JAW_DEBOUNCE_MS) {
@@ -659,6 +609,7 @@ void handleJawClench(unsigned long nowMs) {
 
 // ========== BLINK DETECTION (for triple blink = right click) ==========
 void handleBlinks(unsigned long nowMs) {
+  if (!isIMUCalibrated || !axisCalibrated) return;
   bool envelopeHigh = currentEEGEnvelope > BlinkThreshold;
   if (!blinkActive && envelopeHigh && (nowMs - lastBlinkTime) >= BLINK_DEBOUNCE_MS) {
     lastBlinkTime = nowMs;
@@ -773,8 +724,7 @@ void updateBLELed() {
 }
 
 // ─── setup() ───
-void setup()
-{
+void setup() {
   Serial.begin(115200);
   delay(2000);
 
@@ -812,9 +762,6 @@ void setup()
     }
   }
 
-  debugPrint("System Starting...");
-  debugPrint("Initializing I2C...");
-
   pinMode(INPUT_PIN1, INPUT);
   pinMode(VIBRATION_PIN, OUTPUT);
 
@@ -825,9 +772,6 @@ void setup()
   Keyboard.begin();
   Mouse.begin();
   debugPrint("BLE Combo initialized");
-
-  debugPrint("Initializing BMI270...");
-  debugPrint("BMI270 initialized successfully!");
 
   updateIMULed(true);
 
@@ -873,7 +817,8 @@ void loop() {
       // Invalidate calibration so mouse stops moving
       isIMUCalibrated = false;
       axisCalibrated = false;
-      calState = CAL_IDLE;
+      calState = CAL_INIT_WAIT;
+      calStateStartTime = millis();
 
       smoothRateX = 0;
       smoothRateY = 0;
@@ -916,7 +861,7 @@ void loop() {
 
   if (pixelDirty) {
     pixel.setPixelColor(BATTERY_LED, batteryColor);
-    lastPixel0Color = 0xFFFFFFFF;
+    pixel.show();
     pixelDirty = false;
   }
   updateBLELed();
@@ -936,7 +881,6 @@ void loop() {
     readingsGyro[0] = imu.data.gyroX - gyroBias[0];
     readingsGyro[1] = imu.data.gyroY - gyroBias[1];
     readingsGyro[2] = imu.data.gyroZ - gyroBias[2];
-    readingsGyroValid = true;
 
     // NON-BLOCKING CALIBRATION UPDATE
     updateCalibrationStateMachine(nowMs);
@@ -961,7 +905,7 @@ void loop() {
     handleJawClench(nowMs);
     handleBlinks(nowMs);
 
-// Print envelopes occasionally
+    // Print envelopes occasionally
 #if DEBUG_ENABLE
     static int eegCounter = 0;
     if (eegCounter++ % 100 == 0) {
